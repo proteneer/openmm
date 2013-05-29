@@ -339,6 +339,20 @@ void CudaNonbondedUtilities::initialize(const System& system) {
     }
 }
 
+float4 periodicDistance(float4 p1, float4 p2, float4 pbs) {
+
+
+}
+
+float4 operator-(float4 p1, float4 p2) {
+    float4 result;
+    result.x = p1.x-p2.x;
+    result.y = p1.y-p2.y;
+    result.z = p1.z-p2.z;
+    result.w = p1.w-p2.w;
+    return result;
+}
+
 void CudaNonbondedUtilities::prepareInteractions() {
     if (!useCutoff)
         return;
@@ -353,6 +367,20 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
     context.executeKernel(findBlockBoundsKernel, &findBlockBoundsArgs[0], context.getNumAtoms());
     blockSorter->sort(*sortedBlocks);
+
+    vector<float4> oldPosq(context.getPaddedNumAtoms());
+    vector<float4> posq(context.getPaddedNumAtoms());
+    context.getPosq().download(&posq[0]);
+    oldPositions->download(oldPosq);
+
+    for(int i=0; i<context.getNumAtoms(); i++) {
+        float4 delta = oldPosq[i]-posq[i];
+        if (delta.x*delta.x + delta.y*delta.y + delta.z*delta.z > 0.25f*PADDING*PADDING)
+            rebuild = true;
+
+
+    }
+
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 }

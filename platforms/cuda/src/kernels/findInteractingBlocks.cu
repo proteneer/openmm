@@ -259,9 +259,13 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         buffer[i] = INVALID;
     __syncthreads();
 }
+
 /**
  * Partial nb list algorithm
  *
+ * 1. Find all points that moved more than p/2, compact the list of atoms.
+ * 2. Find all atomblocks whose BB is within (r+p) of p, compact the list of blocks.
+ * 3. Update NBlist entries for these atomblocks. 
  *
  */
 
