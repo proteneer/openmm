@@ -344,6 +344,15 @@ float4 periodicDistance(float4 p1, float4 p2, float4 pbs) {
 
 }
 
+float4 operator+(float4 p1, float4 p2) {
+    float4 result;
+    result.x = p1.x+p2.x;
+    result.y = p1.y+p2.y;
+    result.z = p1.z+p2.z;
+    result.w = p1.w+p2.w;
+    return result;
+}
+
 float4 operator-(float4 p1, float4 p2) {
     float4 result;
     result.x = p1.x-p2.x;
@@ -351,6 +360,23 @@ float4 operator-(float4 p1, float4 p2) {
     result.z = p1.z-p2.z;
     result.w = p1.w-p2.w;
     return result;
+}
+
+float4 make_float4(float x, float y, float z, float w) {
+    float4 result;
+    result.x=x;
+    result.y=y;
+    result.z=z;
+    result.w=w;
+    return result;
+}
+
+float4 operator*(float4 a, float b) {
+    return make_float4(a.x*b, a.y*b, a.z*b, a.w*b);
+}
+
+float4 operator*(float a, float4 b) {
+    return make_float4(a*b.x, a*b.y, a*b.z, a*b.w);
 }
 
 void CudaNonbondedUtilities::prepareInteractions() {
@@ -373,13 +399,63 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.getPosq().download(&posq[0]);
     oldPositions->download(oldPosq);
 
-    for(int i=0; i<context.getNumAtoms(); i++) {
+    double padding = 0.1*cutoff;
+    double paddedCutoff = padding+cutoff;
+
+
+    // Part1. Find points that moved more than p/2
+    vector<int> atomsToUpdate;
+    for(int i=0; i<numAtoms; i++) {
         float4 delta = oldPosq[i]-posq[i];
-        if (delta.x*delta.x + delta.y*delta.y + delta.z*delta.z > 0.25f*PADDING*PADDING)
-            rebuild = true;
-
-
+        if (sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z) > padding/2) {
+            atomsToUpdate.push_back(i);
+        }
     }
+
+    cout << "number of atoms that need more than p/2: " << atomsToUpdate.size() << endl;
+
+    vector<int> blocksToUpdate;
+    for(int i=0;i<context.getNumAtomBlocks();i++) {
+        
+        // determine the box size
+        float4 minPos = posq[i];
+        float4 maxPos = posq[i];
+        int last = min(i+32, numAtoms);
+        for (int j = i+1; j < last; j++) {
+            float4 pos = posq[j];
+#ifdef USE_PERIODIC
+            real4 center = 0.5f*(maxPos+minPos);
+            pos.x -= floor((pos.x-center.x)*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+            pos.y -= floor((pos.y-center.y)*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+            pos.z -= floor((pos.z-center.z)*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+            minPos = make_float4(min(minPos.x,pos.x), min(minPos.y,pos.y), min(minPos.z,pos.z), 0);
+            maxPos = make_float4(max(maxPos.x,pos.x), max(maxPos.y,pos.y), max(maxPos.z,pos.z), 0);
+        }
+        float4 blockSize = 0.5f*(maxPos-minPos);
+        float4 blockCenter = 0.5f*(maxPos+minPos);
+
+        // calculate distance to each of the points
+        for(int j=0; j<atomsToUpdate.size();j++) {
+            
+            float4 delta = posq[j]-blockCenter;
+#ifdef USE_PERIODIC
+            delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+            delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+            delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+            delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
+            delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
+            delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
+            if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
+                blocksToUpdate.push_back(i);
+                break;
+            }
+
+        }
+    };
+
+    cout << "number of blocks within (c+p)/2 of any given moved point: " << atomsToUpdate.size() << endl;
 
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);

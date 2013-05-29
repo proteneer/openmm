@@ -336,6 +336,8 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
     __shared__ int globalIndex;
     __shared__ int numAtoms;
     
+
+
     if (rebuildNeighborList[0] == 0)
         return; // The neighbor list doesn't need to be rebuilt.
     
