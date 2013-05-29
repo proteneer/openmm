@@ -259,6 +259,11 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         buffer[i] = INVALID;
     __syncthreads();
 }
+/**
+ * Partial nb list algorithm
+ *
+ *
+ */
 
 /**
  * Compare the bounding boxes for each pair of atom blocks (comprised of 32 atoms each), forming a tile. If the two
