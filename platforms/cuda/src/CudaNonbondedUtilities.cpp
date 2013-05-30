@@ -359,6 +359,7 @@ float4 operator-(float4 p1, float4 p2) {
     return result;
 }
 
+/*
 float4 make_float4(float x, float y, float z, float w) {
     float4 result;
     result.x=x;
@@ -367,6 +368,7 @@ float4 make_float4(float x, float y, float z, float w) {
     result.w=w;
     return result;
 }
+*/
 
 float periodicDistance(float4 p1, float4 p2, double4 periodicBoxSize) {
     float4 delta = p1-p2;
@@ -410,17 +412,18 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
     // Compute the neighbor list.
 
-    context.executeKernel(findBlockBoundsKernel, &findBlockBoundsArgs[0], context.getNumAtoms());
-    blockSorter->sort(*sortedBlocks);
+    // context.executeKernel(findBlockBoundsKernel, &findBlockBoundsArgs[0], context.getNumAtoms());
+    // disable sorting for now
+    // blockSorter->sort(*sortedBlocks);
 
-    vector<float4> oldPosq(context.getPaddedNumAtoms());
-    vector<float4> posq(context.getPaddedNumAtoms());
-    context.getPosq().download(&posq[0]);
+    // download the positions vector
+    vector<float4> oldPosq;
+    vector<float4> posq;
+    context.getPosq().download(posq);
     oldPositions->download(oldPosq);
 
     double padding = 0.1*cutoff;
     double paddedCutoff = padding+cutoff;
-
 
     // Part 1. Find points that moved more than p/2
     vector<int> atomsToUpdate;
@@ -434,7 +437,11 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<float4> boxSizes(context.getNumAtomBlocks());
     vector<float4> boxCenters(context.getNumAtomBlocks());
    
-    // Part 1.5 Calculate box sizes
+
+    double4 periodicBoxSize = context.getPeriodicBoxSize();
+    double4 invPeriodicBoxSize = context.getInvPeriodicBoxSize();
+
+    // Part 1.5 Calculate bounding box sizes
     for(int i=0;i<context.getNumAtomBlocks();i++) {
         float4 minPos = posq[i];
         float4 maxPos = posq[i];
@@ -442,7 +449,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
         for (int j = i+1; j < last; j++) {
             float4 pos = posq[j];
 #ifdef USE_PERIODIC
-            real4 center = 0.5f*(maxPos+minPos);
+            float4 center = 0.5f*(maxPos+minPos);
             pos.x -= floor((pos.x-center.x)*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
             pos.y -= floor((pos.y-center.y)*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
             pos.z -= floor((pos.z-center.z)*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
@@ -454,23 +461,19 @@ void CudaNonbondedUtilities::prepareInteractions() {
         boxCenters.push_back(0.5f*(maxPos+minPos));
     }
 
-    cout << "number of atoms that need more than p/2: " << atomsToUpdate.size() << endl;
+    cout << "number of atoms that moved more than p/2: " << atomsToUpdate.size() << endl;
 
     // Part 2. Find the atom blocks within (c+p)/2 of any point that moved more than p/2
     vector<int> blocksToUpdate;
     //vector<BoxInfo> boxSizes;
-    for(int i=0;i<context.getNumAtomBlocks();i++) {
-        
+    for(int i=0; i<context.getNumAtomBlocks(); i++) {
         float4 blockSize = boxSizes[i];
         float4 blockCenter = boxCenters[i];
-
         // if we need to sort, can also test by volume
-        //BoxInfo bxy; bxy.size = blockSize.x+blockSize.y+blockSize.z; bxy.index=i;
-        //boxSizes.push_back(bxy);
-
-        // calculate distance to each of the points
+        // BoxInfo bxy; bxy.size = blockSize.x+blockSize.y+blockSize.z; bxy.index=i;
+        // boxSizes.push_back(bxy);
+        // calculate bbox distance to each of the points
         for(int j=0; j<atomsToUpdate.size();j++) {
-            
             float4 delta = posq[j]-blockCenter;
 #ifdef USE_PERIODIC
             delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
@@ -484,18 +487,15 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 blocksToUpdate.push_back(i);
                 break;
             }
-
         }
     };
 
-    cout << "number of blocks within (c+p)/2 of any given moved point: " << atomsToUpdate.size() << endl;
+    cout << "number of blocks within (c+p)/2 of any point that moved more than p/2: " << atomsToUpdate.size() << endl;
 
-    // Part 3. Reconstruct neighbor-list only for atom blocks that moved more than p/2
+    // Part 3. Reconstruct neighborlist only for atom blocks that moved more than p/2
   
     // count average neighbours per atomblock
-    context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
-
-    // if a tile has exclusions - do not add it to this list. 
+    // context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
 
     // output interactingTiles
     // output interactingAtoms
@@ -522,8 +522,8 @@ void CudaNonbondedUtilities::prepareInteractions() {
         cout << "block: " << i << " " << atomblockNeighbourCount[i] << endl;
     }
 
-    // Compact out the old blocks and values that need updating. 
-    vector<int> hInteractingAtoms;
+    // Compact out the old blocks and values 
+    vector<unsigned int> hInteractingAtoms;
     interactingAtoms->download(hInteractingAtoms);
     vector<bool> hIACompactionFlags(hInteractingAtoms.size(), 0);
     vector<bool> hITCompactionFlags(hInteractingTiles.size(), 0);
@@ -532,12 +532,13 @@ void CudaNonbondedUtilities::prepareInteractions() {
         for(int j=0; j<blocksToUpdate.size();j++) {
             if(hInteractingTiles[i].x == blocksToUpdate[j]) {
                 hITCompactionFlags[i] = 1;
+                break;
             }
         }
         // corresponding entires in Interacting Atoms also need to be
         // updated
         if(hITCompactionFlags[i] == 1) {
-            for(int j=i*32;j<(i+1)*32;j++) {
+            for(int j=i*32; j<min((int) (i+1)*32,(int) hIACompactionFlags.size()); j++) {
                 hIACompactionFlags[j] = 1;
             }
         }
@@ -548,14 +549,13 @@ void CudaNonbondedUtilities::prepareInteractions() {
             hNewInteractingTiles.push_back(hInteractingTiles[i]);
         }
     }
-    vector<int> hNewInteractingAtoms;
+    vector<unsigned int> hNewInteractingAtoms;
     for(int i=0; i<hInteractingAtoms.size();i++) {
         if(hIACompactionFlags[i] == 0) {
             hNewInteractingAtoms.push_back(hInteractingAtoms[i]);
         }
     }
 
-    int interactionCount;
 
     // After compaction, rebuild neighbor list
     for(int i=0; i<blocksToUpdate.size(); i++) {
@@ -621,10 +621,13 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }
 
+    interactingTiles->upload(hNewInteractingTiles);
+    interactingAtoms->upload(hNewInteractingAtoms);
+    vector<unsigned int> hNewICount(1, hNewInteractingTiles.size());
+    interactionCount->upload(hNewICount);
 
-
-    context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
-    context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
+    //context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
+    //context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 }
 
 void CudaNonbondedUtilities::computeInteractions() {
