@@ -35,7 +35,7 @@ extern "C" __global__ void findBlockBounds(int numAtoms, real4 periodicBoxSize, 
         real4 blockSize = 0.5f*(maxPos-minPos);
         blockBoundingBox[index] = blockSize;
         blockCenter[index] = 0.5f*(maxPos+minPos);
-        sortedBlocks[index] = make_real2(blockSize.x+blockSize.y+blockSize.z, index);
+        sortedBlocks[index] = make_real2(blockSize.x+blockSize.y+blockSize.z, index); // test changing to volume?
         index += blockDim.x*gridDim.x;
         base = index*TILE_SIZE;
     }
@@ -217,6 +217,8 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         int tilesToStore = (storePartialTile ? (atomsToStore+TILE_SIZE-1)/TILE_SIZE : atomsToStore/TILE_SIZE);
         if (tilesToStore > 0) {
             if (threadIdx.x == 0)
+                // retrieves interactionCount from global memory atomically
+                // this allows blocks to cooperate
                 baseIndex = atomicAdd(interactionCount, tilesToStore);
             __syncthreads();
             if (threadIdx.x == 0)
@@ -308,11 +310,11 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
  * [in] sortedBlocks           - a sorted list of atom blocks based on volume
  * [in] sortedBlockCenter      - sorted centers, duplicated for fast access to avoid indexing
  * [in] sortedBlockBoundingBox - sorted bounding boxes, duplicated for fast access
- * [in] exclusionIndices       - maps into exclusionRowIndices with the starting position for a given atom
+ * [in] exclusionIndices       - maps into exclusionRowIndices with the starting position for a given block
  * [in] exclusionRowIndices    - stores the a continuous list of exclusions
- *           eg: block 0 is excluded from atom 3,5,6
- *               block 1 is excluded from atom 3,4
- *               block 2 is excluded from atom 1,3,5,6
+ *           eg: block 0 is excluded from blocks 3,5,6
+ *               block 1 is excluded from blocks 3,4
+ *               block 2 is excluded from blocks 1,3,5,6
  *              exclusionIndices[0][3][5][8]
  *           exclusionRowIndices[3][5][6][3][4][1][3][5][6]
  *                         index 0  1  2  3  4  5  6  7  8 
@@ -385,6 +387,8 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
             delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
             delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
             bool hasExclusions = false;
+
+            // for each block, check the bit pattern
             for (int k = 0; k < numExclusions; k++)
                 hasExclusions |= (exclusionsForX[k] == y);
             if (j < NUM_BLOCKS && delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED && !hasExclusions) {

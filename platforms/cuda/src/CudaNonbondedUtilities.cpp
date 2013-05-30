@@ -339,10 +339,7 @@ void CudaNonbondedUtilities::initialize(const System& system) {
     }
 }
 
-float4 periodicDistance(float4 p1, float4 p2, float4 pbs) {
 
-
-}
 
 float4 operator+(float4 p1, float4 p2) {
     float4 result;
@@ -371,12 +368,32 @@ float4 make_float4(float x, float y, float z, float w) {
     return result;
 }
 
+float periodicDistance(float4 p1, float4 p2, double4 periodicBoxSize) {
+    float4 delta = p1-p2;
+#ifdef USE_PERIODIC
+    delta.x -= floor(delta.x/PeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+    delta.y -= floor(delta.y/PeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+    delta.z -= floor(delta.z/PeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+    return sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z);
+}
+
+
 float4 operator*(float4 a, float b) {
     return make_float4(a.x*b, a.y*b, a.z*b, a.w*b);
 }
 
 float4 operator*(float a, float4 b) {
     return make_float4(a*b.x, a*b.y, a*b.z, a*b.w);
+}
+
+struct BoxInfo {
+    float size;
+    int index;
+};
+
+bool boxInfoComparator(BoxInfo a, BoxInfo b) {
+    return a.size<b.size;
 }
 
 void CudaNonbondedUtilities::prepareInteractions() {
@@ -403,7 +420,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
     double paddedCutoff = padding+cutoff;
 
 
-    // Part1. Find points that moved more than p/2
+    // Part 1. Find points that moved more than p/2
     vector<int> atomsToUpdate;
     for(int i=0; i<numAtoms; i++) {
         float4 delta = oldPosq[i]-posq[i];
@@ -412,12 +429,11 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }
 
-    cout << "number of atoms that need more than p/2: " << atomsToUpdate.size() << endl;
-
-    vector<int> blocksToUpdate;
+    vector<float4> boxSizes(context.getNumAtomBlocks());
+    vector<float4> boxCenters(context.getNumAtomBlocks());
+   
+    // Part 1.5 Calculate box sizes
     for(int i=0;i<context.getNumAtomBlocks();i++) {
-        
-        // determine the box size
         float4 minPos = posq[i];
         float4 maxPos = posq[i];
         int last = min(i+32, numAtoms);
@@ -432,8 +448,23 @@ void CudaNonbondedUtilities::prepareInteractions() {
             minPos = make_float4(min(minPos.x,pos.x), min(minPos.y,pos.y), min(minPos.z,pos.z), 0);
             maxPos = make_float4(max(maxPos.x,pos.x), max(maxPos.y,pos.y), max(maxPos.z,pos.z), 0);
         }
-        float4 blockSize = 0.5f*(maxPos-minPos);
-        float4 blockCenter = 0.5f*(maxPos+minPos);
+        boxSizes.push_back(0.5f*(maxPos-minPos));
+        boxCenters.push_back(0.5f*(maxPos+minPos));
+    }
+
+    cout << "number of atoms that need more than p/2: " << atomsToUpdate.size() << endl;
+
+    // Part 2. Find the atom blocks within (c+p)/2 of any point that moved more than p/2
+    vector<int> blocksToUpdate;
+    //vector<BoxInfo> boxSizes;
+    for(int i=0;i<context.getNumAtomBlocks();i++) {
+        
+        float4 blockSize = boxSizes[i];
+        float4 blockCenter = boxCenters[i];
+
+        // if we need to sort, can also test by volume
+        //BoxInfo bxy; bxy.size = blockSize.x+blockSize.y+blockSize.z; bxy.index=i;
+        //boxSizes.push_back(bxy);
 
         // calculate distance to each of the points
         for(int j=0; j<atomsToUpdate.size();j++) {
@@ -456,6 +487,100 @@ void CudaNonbondedUtilities::prepareInteractions() {
     };
 
     cout << "number of blocks within (c+p)/2 of any given moved point: " << atomsToUpdate.size() << endl;
+
+    // Part 3. Reconstruct neighbor-list only for atom blocks that moved more than p/2
+  
+    // count average neighbours per atomblock
+    context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
+
+    // if a tile has exclusions - do not add it to this list. 
+
+    // output interactingTiles
+    // output interactingAtoms
+    // output interactionCount
+
+    // [in] exclusionIndices (int)       - maps into exclusionRowIndices with the starting position for a given block
+    // [in] exclusionRowIndices (int) - stores the a continuous list of exclusions
+
+    vector<unsigned int> hExclusionIndices;
+    vector<unsigned int> hExclusionRowIndices;
+    exclusionIndices->download(hExclusionIndices);
+    exclusionIndices->download(hExclusionRowIndices);
+
+    vector<int2> hInteractingTiles;
+    interactingTiles->download(hInteractingTiles);
+
+    vector<int> atomblockNeighbourCount(context.getNumAtomBlocks(),0);
+    for(int i=0;i<hInteractingTiles.size();i++) {
+        atomblockNeighbourCount[hInteractingTiles[i].x] += 32;
+    }
+    
+    cout << "atomblock Neighbour count" << endl;
+    for(int i=0;i<atomblockNeighbourCount.size();i++) {
+        cout << 
+    }
+
+    // TODO: change to start with the old one. 
+    vector<int> hInteractingAtoms(context.getNumAtomBlocks());
+    int interactionCount;
+    for(int i=0; i<blocksToUpdate.size(); i++) {
+
+        int x = blocksToUpdate[i];
+        
+        float4 blockCenterX = boxCenters[x];
+        float4 blockSizeX = boxCenters[x];
+
+        int xExclStart = hExclusionIndices[x];
+        int xExclEnd = hExclusionIndices[x+1];
+
+        for(int y=0; y<context.getNumAtomBlocks(); y++) {
+            
+            // compare bounding boxes
+            bool hasExclusions = false;
+            for(int excl = xExclStart; excl<xExclEnd; excl++) {
+                hasExclusions |= (hExclusionRowIndices[excl] == y);
+            }
+
+            if(!hasExclusions) {
+
+                float4 blockCenterY = boxCenters[y];
+                float4 blockSizeY = boxCenters[y];
+                float4 delta = blockCenterX-blockCenterY;
+#ifdef USE_PERIODIC
+                delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                delta.x = max(0.0f, fabs(delta.x)-blockSizeX.x-blockSizeY.x);
+                delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
+                delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
+            
+                // coarse-grain neighbourlist
+                if(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < 0.25*paddedCutoff*paddedCutoff) {
+                    int2 tile;
+                    tile.x=x; tile.y=y;
+                    hInteractingTiles.push_back(tile);
+
+                    // fine-grain neighbourlist
+                    for(int p=y*32; p<(y+1)*32; p++) {
+                        if(p>=context.getNumAtoms()) {
+                            hInteractingAtoms.push_back(context.getNumAtoms());
+                        } else {
+                            hInteractingAtoms.push_back(
+                        }
+                    }
+
+
+                }
+            
+            }
+
+            
+            hInteractingAtoms
+        }
+    }
+
+
 
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);

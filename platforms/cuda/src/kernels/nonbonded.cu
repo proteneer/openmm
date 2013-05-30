@@ -362,6 +362,12 @@ extern "C" __global__ void computeNonbonded(
             includeTile = (skipTiles[currentSkipIndex] != pos);
         }
         if (includeTile) {
+            //      pos = warp*numTiles/numWarps;
+            //        x = tileIndices[pos].x
+            // so atom1 = tileIndices[pos].x*TILE_SIZE+tgx (continuous)
+            //    atom2 = interactingAtoms[pos*TILE_SIZE+tgx]
+
+
             unsigned int atom1 = x*TILE_SIZE + tgx;
             // Load atom data for this tile.
             real4 posq1 = posq[atom1];
