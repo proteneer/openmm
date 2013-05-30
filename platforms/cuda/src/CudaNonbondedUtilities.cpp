@@ -396,6 +396,8 @@ bool boxInfoComparator(BoxInfo a, BoxInfo b) {
     return a.size<b.size;
 }
 
+#define USE_PERIODIC
+
 void CudaNonbondedUtilities::prepareInteractions() {
     if (!useCutoff)
         return;
@@ -515,36 +517,67 @@ void CudaNonbondedUtilities::prepareInteractions() {
         atomblockNeighbourCount[hInteractingTiles[i].x] += 32;
     }
     
-    cout << "atomblock Neighbour count" << endl;
+    cout << "number of neighbors per atom block:" << endl;
     for(int i=0;i<atomblockNeighbourCount.size();i++) {
-        cout << 
+        cout << "block: " << i << " " << atomblockNeighbourCount[i] << endl;
     }
 
-    // TODO: change to start with the old one. 
-    vector<int> hInteractingAtoms(context.getNumAtomBlocks());
+    // Compact out the old blocks and values that need updating. 
+    vector<int> hInteractingAtoms;
+    interactingAtoms->download(hInteractingAtoms);
+    vector<bool> hIACompactionFlags(hInteractingAtoms.size(), 0);
+    vector<bool> hITCompactionFlags(hInteractingTiles.size(), 0);
+    for(int i=0; i<hInteractingTiles.size(); i++) {
+        // see which blocks need to be removed
+        for(int j=0; j<blocksToUpdate.size();j++) {
+            if(hInteractingTiles[i].x == blocksToUpdate[j]) {
+                hITCompactionFlags[i] = 1;
+            }
+        }
+        // corresponding entires in Interacting Atoms also need to be
+        // updated
+        if(hITCompactionFlags[i] == 1) {
+            for(int j=i*32;j<(i+1)*32;j++) {
+                hIACompactionFlags[j] = 1;
+            }
+        }
+    }
+    vector<int2> hNewInteractingTiles;
+    for(int i=0; i<hInteractingTiles.size();i++) {
+        if(hITCompactionFlags[i] == 0) {
+            hNewInteractingTiles.push_back(hInteractingTiles[i]);
+        }
+    }
+    vector<int> hNewInteractingAtoms;
+    for(int i=0; i<hInteractingAtoms.size();i++) {
+        if(hIACompactionFlags[i] == 0) {
+            hNewInteractingAtoms.push_back(hInteractingAtoms[i]);
+        }
+    }
+
     int interactionCount;
+
+    // After compaction, rebuild neighbor list
     for(int i=0; i<blocksToUpdate.size(); i++) {
-
         int x = blocksToUpdate[i];
-        
         float4 blockCenterX = boxCenters[x];
-        float4 blockSizeX = boxCenters[x];
-
+        float4 blockSizeX = boxSizes[x];
         int xExclStart = hExclusionIndices[x];
         int xExclEnd = hExclusionIndices[x+1];
 
+        // compare blocks to update against each of the bounding boxes
+
+        int numAtomsAdded = 0;
+
         for(int y=0; y<context.getNumAtomBlocks(); y++) {
-            
-            // compare bounding boxes
             bool hasExclusions = false;
             for(int excl = xExclStart; excl<xExclEnd; excl++) {
                 hasExclusions |= (hExclusionRowIndices[excl] == y);
             }
 
             if(!hasExclusions) {
-
                 float4 blockCenterY = boxCenters[y];
-                float4 blockSizeY = boxCenters[y];
+                float4 blockSizeY = boxSizes[y];
                 float4 delta = blockCenterX-blockCenterY;
 #ifdef USE_PERIODIC
                 delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
@@ -555,28 +588,36 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
                 delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
             
-                // coarse-grain neighbourlist
+                // coarse-grained neighborlist
                 if(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < 0.25*paddedCutoff*paddedCutoff) {
-                    int2 tile;
-                    tile.x=x; tile.y=y;
-                    hInteractingTiles.push_back(tile);
-
-                    // fine-grain neighbourlist
-                    for(int p=y*32; p<(y+1)*32; p++) {
-                        if(p>=context.getNumAtoms()) {
-                            hInteractingAtoms.push_back(context.getNumAtoms());
-                        } else {
-                            hInteractingAtoms.push_back(
+                    // fine grained neighborlist calculation
+                    for(int atom1 = x*32; atom1 < min((x+1)*32,context.getNumAtoms()); atom1++) {
+                        for(int atom2 = y*32; atom2 < min((y+1)*32,context.getNumAtoms()); atom2++) {
+                            float4 deltaAtom = posq[atom1]-posq[atom2];
+#ifdef USE_PERIODIC
+                            deltaAtom.x -= floor(deltaAtom.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                            deltaAtom.y -= floor(deltaAtom.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                            deltaAtom.z -= floor(deltaAtom.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                            if(deltaAtom.x*deltaAtom.x+deltaAtom.y*deltaAtom.y+deltaAtom.z*deltaAtom.z < 0.25*paddedCutoff*paddedCutoff) {
+                                hNewInteractingAtoms.push_back(atom2);
+                                numAtomsAdded++;
+                            }
                         }
-                    }
+                    } // fine-grained neighbourlist calculation
+                } // if bbox bbox calculation passes
+            } //  if no exclusions
+        } // for each atomblock
 
+        int tilesToAdd = ceil((float) numAtomsAdded/(float) 32);
+        int extraAtoms = tilesToAdd*32-numAtomsAdded;
 
-                }
-            
-            }
-
-            
-            hInteractingAtoms
+        for(int t=0; t<tilesToAdd; t++) {
+            int2 tile; tile.x=x; tile.y=-1; // tile.y not used for anything
+            hNewInteractingTiles.push_back(tile);
+        }
+        for(int t=0; t<extraAtoms; t++) {
+            hNewInteractingAtoms.push_back(context.getNumAtoms());
         }
     }
 
