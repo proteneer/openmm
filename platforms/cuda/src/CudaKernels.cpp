@@ -84,9 +84,7 @@ void CudaCalcForcesAndEnergyKernel::initialize(const System& system) {
 
 void CudaCalcForcesAndEnergyKernel::beginComputation(ContextImpl& context, bool includeForces, bool includeEnergy, int groups) {
     cu.setAsCurrent();
-    
-    cout << "bc1" << endl;
-
+   
     CudaNonbondedUtilities& nb = cu.getNonbondedUtilities();
     bool includeNonbonded = ((groups&(1<<nb.getForceGroup())) != 0);
     cu.setAtomsWereReordered(false);
@@ -94,15 +92,11 @@ void CudaCalcForcesAndEnergyKernel::beginComputation(ContextImpl& context, bool 
         cu.reorderAtoms(!cu.getMoleculesAreInvalid());
         nb.updateNeighborListSize();
     }
-
-    cout << "bc2" << endl;
-
     cu.setComputeForceCount(cu.getComputeForceCount()+1);
     cu.clearAutoclearBuffers();
     if (includeNonbonded)
         nb.prepareInteractions();
 
-    cout << "bc3" << endl;
 }
 
 double CudaCalcForcesAndEnergyKernel::finishComputation(ContextImpl& context, bool includeForces, bool includeEnergy, int groups) {

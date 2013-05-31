@@ -411,6 +411,8 @@ void CudaNonbondedUtilities::prepareInteractions() {
     }
 
 
+    cout << "COMPUTE FORCE COUNT: " << context.getComputeForceCount() << endl;
+
     cout << "preparing interactions." << endl;
 
     // Compute the neighbor list.
@@ -425,8 +427,8 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.getPosq().download(posq);
     oldPositions->download(oldPosq);
 
-    cout << "posq1.x" << posq[0].x << endl;
-    cout << "oldPosq1.x" << oldPosq[0].x << endl;
+    //cout << "posq1.x" << posq[0].x << endl;
+    //cout << "oldPosq1.x" << oldPosq[0].x << endl;
 
     //cout << "oldPosq size: " << oldPosq.size() << endl;
     //cout << "posq size: " << posq.size() << endl;
@@ -473,12 +475,12 @@ void CudaNonbondedUtilities::prepareInteractions() {
         boxCenters[i]=0.5f*(maxPos+minPos);
     }
 
-    cout << "boxSizes 234" << boxSizes[234].x << " " << boxSizes[234].y << " " << boxSizes[234].z << endl;
-    cout << "boxCenters 234" << boxCenters[234].x << " " << boxCenters[234].y << " " << boxCenters[234].z << endl;
+    //cout << "boxSizes 234" << boxSizes[234].x << " " << boxSizes[234].y << " " << boxSizes[234].z << endl;
+    //cout << "boxCenters 234" << boxCenters[234].x << " " << boxCenters[234].y << " " << boxCenters[234].z << endl;
 
-    // Part 2. Find the atom blocks within (c+p)/2 of any point that moved more than p/2
+    // Part 2. Find the atom blocks within c+p of any point that moved more than p/2
     vector<int> blocksToUpdate(context.getNumAtomBlocks(),-1);
-    //vector<BoxInfo> boxSizes;
+        //vector<BoxInfo> boxSizes;
 
     // print out all the blocks to update
     //cout << "atoms to update: " << endl;
@@ -531,12 +533,21 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     };
 
+    // testing magically force all blocks to update if % 7
+    //if(context.getComputeForceCount() % 7 == 0) {
+    //for(int i=0; i<blocksToUpdate.size(); i++) {
+    //    blocksToUpdate[i] = i;
+    //}
+    //}
+
+
     // print out all the blocks to update
+    /*
     cout << "blocks to update: " << endl;
     for(int i=0;i<blocksToUpdate.size();i++) {
         cout << blocksToUpdate[i] << " ";
     } cout << endl;
-
+    */
 
     vector<int> tempBlocksToUpdate;
     for(int i=0;i<blocksToUpdate.size();i++) {
@@ -547,8 +558,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
     blocksToUpdate = tempBlocksToUpdate;
 
-
-    cout << "number of blocks within (c+p)/2 of any point that moved more than p/2: " << blocksToUpdate.size() << endl;
+    cout << "number of blocks within (c+p) of any point that moved more than p/2: " << blocksToUpdate.size() << endl;
 
     // Part 3. Reconstruct neighborlist only for atom blocks that moved more than p/2
     // context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
@@ -560,22 +570,17 @@ void CudaNonbondedUtilities::prepareInteractions() {
     exclusionIndices->download(hExclusionIndices);
     exclusionIndices->download(hExclusionRowIndices);
 
-    vector<ushort2> hInteractingTiles;
-    interactingTiles->download(hInteractingTiles);
-
-
-
 
     //for(int i=0; i<hInteractingTiles.size();i++) {
     //    cout << hInteractingTiles[i].x;
     // }
     //cout << endl;
-        
-        //vector<int> atomblockNeighbourCount(context.getNumAtomBlocks(),0);
+
+    //vector<int> atomblockNeighbourCount(context.getNumAtomBlocks(),0);
     //for(int i=0;i<hInteractingTiles.size();i++) {
     //    atomblockNeighbourCount[hInteractingTiles[i].x] += 32;
     //}
-    
+
     //
 
     //cout << "number of neighbors per atom block:" << endl;
@@ -584,8 +589,15 @@ void CudaNonbondedUtilities::prepareInteractions() {
     //}
 
     // Compact out the old blocks and values
+
+
+    vector<ushort2> hInteractingTiles;
+    interactingTiles->download(hInteractingTiles);
+
     vector<unsigned int> hInteractingAtoms;
     interactingAtoms->download(hInteractingAtoms);
+    
+    /*
     cout << "first 10 hInteractingTiles: " << endl;
     for(int i=0; i<min((int)10,(int)hInteractingTiles.size()); i++) {
         cout << hInteractingTiles[i].x << " ";
@@ -596,6 +608,9 @@ void CudaNonbondedUtilities::prepareInteractions() {
         cout << hInteractingAtoms[i] << " ";
     }
     cout << endl;
+    */
+
+    cout << "initial state, size of hInteractingTiles: " << hInteractingTiles.size() <<", size of hInteractingAtoms: " << hInteractingAtoms.size() << endl;
 
     vector<bool> hIACompactionFlags(hInteractingAtoms.size(), 0);
     vector<bool> hITCompactionFlags(hInteractingTiles.size(), 0);
@@ -628,18 +643,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }
 
-    cout << "compaction complete" << endl;
-    cout << "first 10 hNewInteractingTiles: " << endl;
-    for(int i=0; i<min((int)10,(int)hNewInteractingTiles.size()); i++) {
-        cout << hNewInteractingTiles[i].x << " ";
-    } 
-    cout << endl;
-    cout << "first 10 hNewInteractingAtoms: " << endl;
-    for(int i=0; i<min((int)10,(int)hNewInteractingAtoms.size()); i++) {
-        cout << hNewInteractingAtoms[i] << " ";
-    }
-    cout << endl;
-
+    cout << "compaction complete, size of hNewInteractingTiles: " << hNewInteractingTiles.size() <<", size of hNewInteractingAtoms: " << hNewInteractingAtoms.size() << endl;
 
     // After compaction, rebuild neighbor list
     for(int i=0; i<blocksToUpdate.size(); i++) {
@@ -706,6 +710,9 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }   
 
+    cout << "append complete, size of hNewInteractingTiles: " << hNewInteractingTiles.size() <<", size of hNewInteractingAtoms: " << hNewInteractingAtoms.size() << endl;
+
+    /*
     cout << "compaction complete" << endl;
     cout << "first 10 hNewInteractingTiles: " << endl;
     for(int i=0; i<min((int)10,(int)hNewInteractingTiles.size()); i++) {
@@ -716,7 +723,8 @@ void CudaNonbondedUtilities::prepareInteractions() {
     for(int i=0; i<min((int)10,(int)hNewInteractingAtoms.size()); i++) {
         cout << hNewInteractingAtoms[i] << " ";
     }
-    cout << endl;
+    cout << endl
+    */
 
     delete interactingTiles;
     delete interactingAtoms;
