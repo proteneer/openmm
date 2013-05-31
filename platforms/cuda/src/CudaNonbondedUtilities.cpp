@@ -425,6 +425,12 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.getPosq().download(posq);
     oldPositions->download(oldPosq);
 
+    cout << "posq1.x" << posq[0].x << endl;
+    cout << "oldPosq1.x" << oldPosq[0].x << endl;
+
+    //cout << "oldPosq size: " << oldPosq.size() << endl;
+    //cout << "posq size: " << posq.size() << endl;
+
     double padding = 0.1*cutoff;
     double paddedCutoff = padding+cutoff;
 
@@ -470,7 +476,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 
     // Part 2. Find the atom blocks within (c+p)/2 of any point that moved more than p/2
-    vector<int> blocksToUpdate;
+    vector<int> blocksToUpdate(context.getNumAtomBlocks(),-1);
     //vector<BoxInfo> boxSizes;
     for(int i=0; i<context.getNumAtomBlocks(); i++) {
         float4 blockSize = boxSizes[i];
@@ -480,21 +486,51 @@ void CudaNonbondedUtilities::prepareInteractions() {
         // boxSizes.push_back(bxy);
         // calculate bbox distance to each of the points
         for(int j=0; j<atomsToUpdate.size();j++) {
-            float4 delta = posq[j]-blockCenter;
+            // is the atomblock affected by where posq[j] ends up?
+            // this makes sure we don't miss any interactions
+            {
+                float4 delta = posq[j]-blockCenter;
 #ifdef USE_PERIODIC
-            delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
-            delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
-            delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+                delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
 #endif
-            delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
-            delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
-            delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
-            if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
-                blocksToUpdate.push_back(i);
-                break;
+                delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
+                delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
+                delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
+                if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
+                    blocksToUpdate[i] = i;
+                    break;
+                }
+            }
+            // is the atomblock affected by where posq[j] came from?
+            // this helps keep the nblist smaller
+            {
+                float4 delta = oldPosq[j]-blockCenter;
+#ifdef USE_PERIODIC
+                delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
+                delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
+                delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
+                if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
+                    blocksToUpdate[i] = i;
+                    break;
+                }
             }
         }
     };
+
+    vector<int> tempBlocksToUpdate;
+    for(int i=0;i<blocksToUpdate.size();i++) {
+        if(blocksToUpdate[i]!=-1) {
+            tempBlocksToUpdate.push_back(i);
+        }
+    }
+
+    blocksToUpdate = tempBlocksToUpdate;
 
     // print out all the blocks to update
     cout << "blocks to update: " << endl;
@@ -607,7 +643,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
         int numAtomsAdded = 0;
 
-        cout << "updating neighbourlist for block " << x << endl;
+        //cout << "updating neighbourlist for block " << x << endl;
 
         for(int y=0; y<context.getNumAtomBlocks(); y++) {
             bool hasExclusions = false;
@@ -627,7 +663,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
                 delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
             
-                // coarse-grained neighborlist
+                // if bbox bbox are within cutoff distance
                 if(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < 0.25*paddedCutoff*paddedCutoff) {
                     // fine grained neighborlist calculation
                     for(int atom1 = x*32; atom1 < min((x+1)*32,context.getNumAtoms()); atom1++) {
@@ -686,6 +722,15 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<int> hNewICount(1, hNewInteractingTiles.size());
     interactionCount->upload(hNewICount);
 
+    // update positions of oldPosq with atom positions of atoms in blocksToUpdate
+    for(int i=0; i < blocksToUpdate.size(); i++) {
+        int startIndex = blocksToUpdate[i]*32;
+        int endIndex = min((blocksToUpdate[i]+1)*32,context.getNumAtoms());
+        for(int j=startIndex;j<endIndex;j++) {
+            oldPosq[j]=posq[j];
+        }
+    }
+    oldPositions->upload(oldPosq);
 
 
     //context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
