@@ -441,9 +441,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
         float4 delta = oldPosq[i]-posq[i];
         if (sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z) > padding/2) {
             atomsToUpdate.push_back(i);
-        } /*else {
-            cout << i << "did not move more than padding/2" << endl;
-        }*/
+        }
     }
 
     cout << "number of atoms that moved more than p/2: " << atomsToUpdate.size() << endl;
@@ -458,8 +456,9 @@ void CudaNonbondedUtilities::prepareInteractions() {
     for(int i=0;i<context.getNumAtomBlocks();i++) {
         float4 minPos = posq[i];
         float4 maxPos = posq[i];
-        int last = min(i+32, numAtoms);
-        for (int j = i+1; j < last; j++) {
+        int first = i*32;
+        int last = min((i+1)*32, numAtoms);
+        for (int j = first; j < last; j++) {
             float4 pos = posq[j];
 #ifdef USE_PERIODIC
             float4 center = 0.5f*(maxPos+minPos);
@@ -470,14 +469,23 @@ void CudaNonbondedUtilities::prepareInteractions() {
             minPos = make_float4(min(minPos.x,pos.x), min(minPos.y,pos.y), min(minPos.z,pos.z), 0);
             maxPos = make_float4(max(maxPos.x,pos.x), max(maxPos.y,pos.y), max(maxPos.z,pos.z), 0);
         }
-        boxSizes.push_back(0.5f*(maxPos-minPos));
-        boxCenters.push_back(0.5f*(maxPos+minPos));
+        boxSizes[i]=0.5f*(maxPos-minPos);
+        boxCenters[i]=0.5f*(maxPos+minPos);
     }
 
+    cout << "boxSizes 234" << boxSizes[234].x << " " << boxSizes[234].y << " " << boxSizes[234].z << endl;
+    cout << "boxCenters 234" << boxCenters[234].x << " " << boxCenters[234].y << " " << boxCenters[234].z << endl;
 
     // Part 2. Find the atom blocks within (c+p)/2 of any point that moved more than p/2
     vector<int> blocksToUpdate(context.getNumAtomBlocks(),-1);
     //vector<BoxInfo> boxSizes;
+
+    // print out all the blocks to update
+    //cout << "atoms to update: " << endl;
+    //for(int i=0;i<atomsToUpdate.size();i++) {
+    //    cout << atomsToUpdate[i] << " ";
+    //} cout << endl;
+
     for(int i=0; i<context.getNumAtomBlocks(); i++) {
         float4 blockSize = boxSizes[i];
         float4 blockCenter = boxCenters[i];
@@ -498,7 +506,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
                 delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
                 delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
-                if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
+                if(sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < paddedCutoff) {
                     blocksToUpdate[i] = i;
                     break;
                 }
@@ -515,7 +523,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 delta.x = max(0.0f, fabs(delta.x)-blockSize.x);
                 delta.y = max(0.0f, fabs(delta.y)-blockSize.y);
                 delta.z = max(0.0f, fabs(delta.z)-blockSize.z);
-                if((delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < 0.25*paddedCutoff*paddedCutoff) {
+                if(sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z) < paddedCutoff) {
                     blocksToUpdate[i] = i;
                     break;
                 }
@@ -523,20 +531,22 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     };
 
-    vector<int> tempBlocksToUpdate;
-    for(int i=0;i<blocksToUpdate.size();i++) {
-        if(blocksToUpdate[i]!=-1) {
-            tempBlocksToUpdate.push_back(i);
-        }
-    }
-
-    blocksToUpdate = tempBlocksToUpdate;
-
     // print out all the blocks to update
     cout << "blocks to update: " << endl;
     for(int i=0;i<blocksToUpdate.size();i++) {
         cout << blocksToUpdate[i] << " ";
     } cout << endl;
+
+
+    vector<int> tempBlocksToUpdate;
+    for(int i=0;i<blocksToUpdate.size();i++) {
+        if(blocksToUpdate[i]!=-1) {
+            tempBlocksToUpdate.push_back(blocksToUpdate[i]);
+        }
+    }
+
+    blocksToUpdate = tempBlocksToUpdate;
+
 
     cout << "number of blocks within (c+p)/2 of any point that moved more than p/2: " << blocksToUpdate.size() << endl;
 
@@ -664,7 +674,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
                 delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
             
                 // if bbox bbox are within cutoff distance
-                if(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < 0.25*paddedCutoff*paddedCutoff) {
+                if(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < paddedCutoff*paddedCutoff) {
                     // fine grained neighborlist calculation
                     for(int atom1 = x*32; atom1 < min((x+1)*32,context.getNumAtoms()); atom1++) {
                         for(int atom2 = y*32; atom2 < min((y+1)*32,context.getNumAtoms()); atom2++) {
@@ -674,7 +684,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
                             deltaAtom.y -= floor(deltaAtom.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
                             deltaAtom.z -= floor(deltaAtom.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
 #endif
-                            if(deltaAtom.x*deltaAtom.x+deltaAtom.y*deltaAtom.y+deltaAtom.z*deltaAtom.z < 0.25*paddedCutoff*paddedCutoff) {
+                            if(deltaAtom.x*deltaAtom.x+deltaAtom.y*deltaAtom.y+deltaAtom.z*deltaAtom.z < paddedCutoff*paddedCutoff) {
                                 hNewInteractingAtoms.push_back(atom2);
                                 numAtomsAdded++;
                             }
