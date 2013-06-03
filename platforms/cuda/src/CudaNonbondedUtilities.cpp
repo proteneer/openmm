@@ -355,6 +355,78 @@ void CudaNonbondedUtilities::prepareInteractions() {
     blockSorter->sort(*sortedBlocks);
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
+
+    vector<unsigned int> hIA;
+    interactingAtoms->download(hIA);
+    vector<ushort2> hIT;
+    interactingTiles->download(hIT);
+
+    //cout << hIA.size() << endl;
+    //cout << hIT.size() << endl;
+
+    vector<int> tPop;
+
+    vector<float4> posq;
+    context.getPosq().download(posq);
+
+    float padding = 0.1*cutoff;
+    float paddedCutoff = cutoff+padding;
+
+    /*
+    cout << hIA[8765*32+29] << endl;
+    cout << hIA[8765*32+30] << endl;
+    cout << hIA[8765*32+31] << endl;
+
+    cout << hIA[8766*32+0] << endl;
+    cout << hIA[8766*32+1] << endl;
+    cout << hIA[8766*32+2] << endl;
+    */
+
+    vector<unsigned int> hInteractionCount;
+    interactionCount->download(hInteractionCount);
+    
+    //cout << hInteractionCount[0] << endl;
+
+    for(int i=0; i<hInteractionCount[0]; i++) {
+        int ixnsPerTile = 0;
+        int x = hIT[i].x;
+        for(unsigned int atom1=x*32;atom1<min(numAtoms,(x+1)*32);atom1++) {
+            float3 posq1;
+            posq1.x = posq[atom1].x;
+            posq1.y = posq[atom1].y;
+            posq1.z = posq[atom1].z;
+            for(int k=0;k<32;k++) {
+                //cout << i << " " << atom1 << " " << k << endl;
+                if(i*32+k<hIA.size()) {
+                    int atom2 = hIA[i*32+k];
+                    if(atom2 < numAtoms) {
+                        float3 posq2;
+                        posq2.x = posq[atom2].x;
+                        posq2.y = posq[atom2].y;
+                        posq2.z = posq[atom2].z;
+                        float3 delta = make_float3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+                        delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                        delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                        delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                        float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+
+                        if(r2 < paddedCutoff*paddedCutoff) {
+                            ixnsPerTile++;
+                        }
+                    }
+                }
+            } 
+        }
+        tPop.push_back(ixnsPerTile);
+    }
+
+    if(context.getComputeForceCount() == 1) {
+        for(int i=0;i<tPop.size();i++) {
+            cout << tPop[i] << endl;
+        }
+    }
 }
 
 void CudaNonbondedUtilities::computeInteractions() {
