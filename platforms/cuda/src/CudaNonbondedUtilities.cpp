@@ -361,9 +361,6 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<ushort2> hIT;
     interactingTiles->download(hIT);
 
-    //cout << hIA.size() << endl;
-    //cout << hIT.size() << endl;
-
     vector<int> tPop;
 
     vector<float4> posq;
@@ -371,16 +368,6 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
     float padding = 0.1*cutoff;
     float paddedCutoff = cutoff+padding;
-
-    /*
-    cout << hIA[8765*32+29] << endl;
-    cout << hIA[8765*32+30] << endl;
-    cout << hIA[8765*32+31] << endl;
-
-    cout << hIA[8766*32+0] << endl;
-    cout << hIA[8766*32+1] << endl;
-    cout << hIA[8766*32+2] << endl;
-    */
 
     vector<unsigned int> hInteractionCount;
     interactionCount->download(hInteractionCount);
