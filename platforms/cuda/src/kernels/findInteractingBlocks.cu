@@ -296,10 +296,11 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
                 denseAtoms[numDenseAtoms+sum[i]-1] = buffer[base+i/WARP_SIZE]*TILE_SIZE+indexInWarp;
         // Store to global memory
         int atomsToStore = numDenseAtoms+sum[BUFFER_SIZE-1];
+        // finish is set to true in the final call to this function. 
         bool storePartialTile = (finish && base >= numValid-BUFFER_SIZE/WARP_SIZE);
         int tilesToStore = (storePartialTile ? (atomsToStore+TILE_SIZE-1)/TILE_SIZE : atomsToStore/TILE_SIZE);
         if (tilesToStore > 0) {
-            // this is a trick used to "allocate" some space in the final output array. 
+            // this is a trick used to "allocate" some space in the final output array so we can have on the fly compaction 
             if (threadIdx.x == 0)
                 baseIndex = atomicAdd(tileInteractionCount, tilesToStore);
             __syncthreads();
@@ -311,7 +312,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
                 for (int i = threadIdx.x; i < tilesToStore*TILE_SIZE; i += blockDim.x)
                     interactingAtoms[baseIndex*TILE_SIZE+i] = (i < atomsToStore ? denseAtoms[i] : NUM_ATOMS);
             }
-        } else {
+        } else { // less than TILE_SIZE number of atoms need be added
             __syncthreads();
             if (threadIdx.x == 0)
                 numDenseAtoms += sum[BUFFER_SIZE-1];
@@ -346,51 +347,59 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         }
         __syncthreads();
         
-        // sum, sum2, temp, atoms are now free for use
+        // sum, sum2, temp, are now free for use
+        // can't use atoms! it is used for overflow
         unsigned int *spareBufferStorage = reinterpret_cast<unsigned int*> atoms;
 
         // k might be indexing into numValid components?
-        for(int bitpos = 0; bitpos < ATOM_THRESHOLD; bitpos++) {
-            // offset stores number of elements in buffer
-            unsigned int offset = 0;
+        
+        // TODO: Try on the fly compaction writing to global mem? would need to do atomicAdd here
+        // but would save some flops and use less shared memory
+        // for each of the possible bits that are set
+
+        // TODO: Try pragma unroll
+        // TOOD: Try registers
+
+        // offset stores number of elements in buffer
+        unsigned int offset = 0;
+
+        for(int bitcounter = 0; bitcounter < ATOM_THRESHOLD; bitcounter++) {
+            // fill up to BUFFER_SIZE (and could probably set bitflags directly to registers)
             for(int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x) {
-                unsigned int bits = interactionBits[k];
                 unsigned int atom2 = sparseAtoms[k];
-                unsigned int bitpos = __ffs(bits);
+                unsigned int bitpos = __ffs(interactionBits[k]);
                 if(bitpos > 0) {
                     unsigned int atom1 = x*TILE_SIZE+bitpos;
-                    spareBufferStorage[threadIdx.x] = make_uint2(atom1, atom2);
+                    sparseAtomsPrefixSumBuffer[k] = make_uint2(atom1, atom2);
                 }
                 sum[k] = (bitpos > 0) ? 1 : 0;
+                interactionBits[k] -= 1 << bitpos;
             }
             __syncthreads();
             prefixSum(sum,temp);
             offset += sum[BUFFER_SIZE-1];
-            // scatter the positions
+            // gather the atoms using prefix sum
             for (int i = threadIdx.x; i < BUFFER_SIZE; i += blockDim.x) {
                 // sum[i]-1 is the scatter index as its an inclusive scan
                 if (sum[i] != (i == 0 ? 0 : sum[i-1])) {
                     unsigned int pos = offset+sum[i]-1;
-                    sparseAtomsCompactionBuffer[pos] = spareBufferStorage[i];
+                    sparseAtomsCompactionBuffer[pos] = sparseAtomsPrefixSumBuffer[i];
                     //interactionBits[sum2[i]-1] = uintBuffer[i];
                 }
             }
-            bits -= 1 << __ffs(pattern);
             __syncthreads();
         }
 
         unsigned int atomsToAdd = offset;
-        __shared__ unsigned int baseIndexAtoms;
 
         if (threadIdx.x == 0)
-            baseIndexAtoms = atomicAdd(atomInteractionCount, atomsToAdd);
+            numSparseAtoms = atomicAdd(numSparseAtoms, atomsToAdd);
 
         __syncthreads();
-        // add
 
-        for(int k = 0; k < offset; k++) {
-
-
+        // write out to global memory
+        for(int k = threadIdx.x; k < offset; k += blockDim.x) {
+            sparseInteractions[numSparseAtoms+k] = sparseCompactionBuffer[k];
         }
 
         // need to compact large buffer and write buffer to disk
@@ -519,6 +528,7 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
     __shared__ int sparseAtoms[BUFFER_SIZE+TILE_SIZE];
 
     // TODO: Use spareAtomCompactionBuffer for everything that isn't overlapping. 
+    __shared__ unsigned int sparseAtomsPrefixSumBuffer[BUFFER_SIZE];
     __shared__ unsigned int sparseAtomsCompactionBuffers[BUFFER_SIZE*ATOM_THRESHOLD]; 
 
     __shared__ real3 posBuffer[TILE_SIZE];
