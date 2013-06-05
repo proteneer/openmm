@@ -340,7 +340,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
                 unsigned int atom2 = sparseAtoms[k];
                 unsigned int bitpos = __ffs(interactionBits[k]);
                 if(bitpos > 0) {
-                    // corner case for x > numAtoms taken care of automatically, as the bitflag will be necessary zero for these atoms
+                    // corner case for x > numAtoms taken care of automatically, as the bitflag is zero for these atoms
                     unsigned int atom1 = x*TILE_SIZE+bitpos;
                     sparseAtomsPrefixSumBuffer[k] = make_uint2(atom1, atom2);
                 }
@@ -360,14 +360,13 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             }
             __syncthreads();
         }
-        unsigned int atomsToAdd = offset;
         // allocate a chunk of memory for write to global memory
         if (threadIdx.x == 0)
-            sparseInteractionCount = atomicAdd(sparseInteractionCount, atomsToAdd);
+            baseIndex = atomicAdd(sparseInteractionCount, offset);
         __syncthreads();
         // write out to global memory
         for(int k = threadIdx.x; k < offset; k += blockDim.x)
-            sparseInteractions[sparseInteractionCount+k] = sparseCompactionBuffer[k];
+            sparseInteractions[baseIndex+k] = sparseCompactionBuffer[k];
         __syncthreads();
     }
 
