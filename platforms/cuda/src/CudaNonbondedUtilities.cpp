@@ -394,11 +394,12 @@ void CudaNonbondedUtilities::prepareInteractions() {
     sparseInteractionCount->download(hSparseAtomsInteractionCount);
     sparseInteractions->download(hSparseAtomsInteractions);
 
+    /*
     for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
         cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
     }
-
     cout << "hInteractionCount: " << hInteractionCount[0] << endl;
+    */
     /*
     for(int i=0; i<hInteractionCount[0]; i++) {
         int ixnsPerTile = 0;
@@ -452,6 +453,7 @@ void CudaNonbondedUtilities::computeInteractions() {
 }
 
 void CudaNonbondedUtilities::updateNeighborListSize() {
+
     if (!useCutoff)
         return;
     unsigned int* pinnedInteractionCount = (unsigned int*) context.getPinnedBuffer();
@@ -467,7 +469,7 @@ void CudaNonbondedUtilities::updateNeighborListSize() {
     if (maxTiles > totalTiles)
         maxTiles = totalTiles;
     delete interactingTiles;
-    delete interactingAtoms;
+    delete interactingAtoms; 
     interactingTiles = NULL; // Avoid an error in the destructor if the following allocation fails
     interactingAtoms = NULL;
     interactingTiles = CudaArray::create<ushort2>(context, maxTiles, "interactingTiles");
