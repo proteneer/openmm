@@ -586,5 +586,13 @@ extern "C" __global__ void computeNonbonded(
         }
         pos++;
     }
+
+    // Third loop: Compute sparse atom interactions. 
+#ifdef USE_CUTOFF
+
+
+
+
+#endif
     energyBuffer[blockIdx.x*blockDim.x+threadIdx.x] += energy;
 }

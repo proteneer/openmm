@@ -4,7 +4,7 @@
 #define WARP_SIZE 32
 #define INVALID 0xFFFF
 #define STORE_FRACTION 0.1
-#define ATOM_THRESHOLD 3
+#define ATOM_THRESHOLD 1
 
 /**
  * Find a bounding box for the atoms in each block.
@@ -274,8 +274,10 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
 #endif
             int flagCount = __popc(interactionFlags);
             sum[i*WARP_SIZE+indexInWarp] = flagCount> ATOM_THRESHOLD ? 1 : 0; // For dense atoms
+#if ATOM_THRESHOLD > 0 // be very careful if we ever decide to turn this off
             sum2[i*WARP_SIZE+indexInWarp] = (flagCount <= ATOM_THRESHOLD && flagCount > 0) ? 1 : 0; // For sparse atoms
             interactionBits[i*WARP_SIZE+indexInWarp] = (flagCount <= ATOM_THRESHOLD && flagCount > 0) ? interactionFlags : 0; // Interaction bitflags in sparse atoms
+#endif
         }
 
         for (int i = numValid-base+threadIdx.x/WARP_SIZE; i < BUFFER_SIZE/WARP_SIZE; i += GROUP_SIZE/WARP_SIZE) {
@@ -394,7 +396,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             offset += sum[BUFFER_SIZE-1];
         }
 
-        
+        /*
         if(x==0 && threadIdx.x == 0) {
             for(int i=0; i<offset; i++) {
                 printf("%d %d | ", sparseAtomsCompactionBuffer[i].x,sparseAtomsCompactionBuffer[i].y);
@@ -402,7 +404,8 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
                 printf("\n\n");
         }
         __syncthreads();
-        
+        */
+
         // allocate a chunk of memory for write to global memory
         if (threadIdx.x == 0)
             baseIndex = atomicAdd(sparseInteractionCount, offset);

@@ -376,8 +376,6 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<ushort2> hIT;
     interactingTiles->download(hIT);
 
-    vector<int> tPop;
-
     vector<float4> posq;
     context.getPosq().download(posq);
 
@@ -398,7 +396,9 @@ void CudaNonbondedUtilities::prepareInteractions() {
     }
     cout << "hSparseAtomsInteractionCount: " << hSparseAtomsInteractionCount[0] << endl;
     cout << "hTileInteractionCount: " << hInteractionCount[0] << endl;
+    
     /*
+    vector<int> tPop;
     for(int i=0; i<hInteractionCount[0]; i++) {
         int ixnsPerTile = 0;
         int x = hIT[i].x;
@@ -440,7 +440,9 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }
     */
+    
 }
+
 
 void CudaNonbondedUtilities::computeInteractions() {
     if (kernelSource.size() > 0) {
