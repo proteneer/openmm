@@ -263,6 +263,8 @@ private:
     CudaArray* interactingTiles;
     CudaArray* interactingAtoms;
     CudaArray* interactionCount;
+    CudaArray* sparseInteractions;
+    CudaArray* sparseInteractionCount;
     CudaArray* blockCenter;
     CudaArray* blockBoundingBox;
     CudaArray* sortedBlocks;

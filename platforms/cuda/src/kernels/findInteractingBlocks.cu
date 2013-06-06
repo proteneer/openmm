@@ -51,7 +51,7 @@ extern "C" __global__ void findBlockBounds(int numAtoms, real4 periodicBoxSize, 
 extern "C" __global__ void sortBoxData(const real2* __restrict__ sortedBlock, const real4* __restrict__ blockCenter,
         const real4* __restrict__ blockBoundingBox, real4* __restrict__ sortedBlockCenter,
         real4* __restrict__ sortedBlockBoundingBox, const real4* __restrict__ posq, const real4* __restrict__ oldPositions,
-        unsigned int* __restrict__ tileInteractionCount, int* __restrict__ rebuildNeighborList) {
+        unsigned int* __restrict__ tileInteractionCount, unsigned int* __restrict__ sparseInteractionCount, int* __restrict__ rebuildNeighborList) {
     for (int i = threadIdx.x+blockIdx.x*blockDim.x; i < NUM_BLOCKS; i += blockDim.x*gridDim.x) {
         int index = (int) sortedBlock[i].y;
         sortedBlockCenter[i] = blockCenter[index];
@@ -69,6 +69,7 @@ extern "C" __global__ void sortBoxData(const real2* __restrict__ sortedBlock, co
     if (rebuild) {
         rebuildNeighborList[0] = 1;
         tileInteractionCount[0] = 0;
+        sparseInteractionCount[0] = 0;
     }
 }
 
@@ -76,7 +77,7 @@ extern "C" __global__ void sortBoxData(const real2* __restrict__ sortedBlock, co
  * Perform an inclusive parallel prefix sum over an array of size BUFFER_SIZE within a threadblock. 
  * The input values are all assumed to be 0 or 1.
  */
-_device__ void prefixSum(short* sum, ushort2* temp) {
+__device__ void prefixSum(short* sum, ushort2* temp) {
 #if __CUDA_ARCH__ >= 300
     const int indexInWarp = threadIdx.x%WARP_SIZE;
     const int warpMask = (2<<indexInWarp)-1;
@@ -169,8 +170,8 @@ _device__ void prefixSum(short* sum, ushort2* temp) {
  */ 
 
 __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, short* sum, short* sum2, unsigned int *interactionBits, ushort2* temp, 
-    int* denseAtoms, unsigned int *sparseAtoms, int& numDenseAtoms, unsigned int* sparseAtomsCompactionBuffer, unsigned int* sparseAtomsPrefixSumBuffer,
-    int& baseIndex, unsigned int* tileInteractionCount, ushort2* interactingTiles, unsigned int* interactingAtoms, uint2* sparseInteractions, unsigned int* sparseInteractionCount
+    unsigned int* denseAtoms, unsigned int *sparseAtoms, int& numDenseAtoms, uint2* sparseAtomsCompactionBuffer, uint2* sparseAtomsPrefixSumBuffer,
+    int& baseIndex, unsigned int* tileInteractionCount, ushort2* interactingTiles, unsigned int* interactingAtoms, unsigned int* sparseInteractionCount, uint2* sparseInteractions, 
     real4 periodicBoxSize, real4 invPeriodicBoxSize, const real4* posq, real3* posBuffer, real4 blockCenterX, real4 blockSizeX, unsigned int maxTiles, bool finish) {
 
     const bool singlePeriodicCopy = (0.5f*periodicBoxSize.x-blockSizeX.x >= PADDED_CUTOFF &&
@@ -312,7 +313,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         // Compact interaction bitflags
         // sizeof ushort2 == sizeof unsigned int, and they are both of BUFFER_SIZE
         __syncthreads();
-        unsigned int* uintBuffer = reinterpret_cast<int*>(temp);
+        unsigned int* uintBuffer = reinterpret_cast<unsigned int*>(temp);
         for(int i = threadIdx.x; i < BUFFER_SIZE; i += blockDim.x) {
             uintBuffer[i] = interactionBits[i];
         }
@@ -366,7 +367,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         __syncthreads();
         // write out to global memory
         for(int k = threadIdx.x; k < offset; k += blockDim.x)
-            sparseInteractions[baseIndex+k] = sparseCompactionBuffer[k];
+            sparseInteractions[baseIndex+k] = sparseAtomsCompactionBuffer[k];
         __syncthreads();
     }
 
@@ -380,7 +381,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             if (threadIdx.x == 0)
                 interactingTiles[baseIndex] = make_ushort2(x, singlePeriodicCopy);
             if (threadIdx.x < TILE_SIZE)
-                interactingAtoms[baseIndex*TILE_SIZE+threadIdx.x] = (threadIdx.x < numDenseAtoms ? atoms[threadIdx.x] : NUM_ATOMS);
+                interactingAtoms[baseIndex*TILE_SIZE+threadIdx.x] = (threadIdx.x < numDenseAtoms ? denseAtoms[threadIdx.x] : NUM_ATOMS);
         }
     }
 
@@ -451,7 +452,7 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
         ushort2* __restrict__ interactingTiles, unsigned int* __restrict__ interactingAtoms, const real4* __restrict__ posq, unsigned int maxTiles, unsigned int startBlockIndex,
         unsigned int numBlocks, real2* __restrict__ sortedBlocks, const real4* __restrict__ sortedBlockCenter, const real4* __restrict__ sortedBlockBoundingBox,
         const unsigned int* __restrict__ exclusionIndices, const unsigned int* __restrict__ exclusionRowIndices, real4* __restrict__ oldPositions,
-        const int* __restrict__ rebuildNeighborList,  uint2* __restrict__ sparseInteractions, unsigned int* __restrict__ sparseInteractionCount) {
+        const int* __restrict__ rebuildNeighborList, unsigned int* __restrict__ sparseInteractionCount, uint2* __restrict__ sparseInteractions) {
 
     // alot of these buffers can be shared and re-used to optimize smem usage
     // but it should require some funky casts and VERY careful management
@@ -462,13 +463,11 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
     __shared__ short sum[BUFFER_SIZE]; // 512*2 bytes
     __shared__ short sum2[BUFFER_SIZE]; // 512*2 bytes
     __shared__ ushort2 temp[BUFFER_SIZE]; // 512*4 bytes
-    __shared__ unsigned int partialList[BUFFER_SIZE]; // 512*4 bytes
-    __shared__ int denseAtoms[BUFFER_SIZE+TILE_SIZE]; // 512*4 bytes
-    __shared__ int sparseAtoms[BUFFER_SIZE+TILE_SIZE]; // 512*4 bytes
-
-    // TODO: Use spareAtomCompactionBuffer for everything that isn't overlapping. 
-    __shared__ unsigned int sparseAtomsPrefixSumBuffer[BUFFER_SIZE]; //512*4 bytes
-    __shared__ unsigned int sparseAtomsCompactionBuffers[BUFFER_SIZE*ATOM_THRESHOLD]; // 512*4*3 bytes 
+    __shared__ unsigned int denseAtoms[BUFFER_SIZE+TILE_SIZE]; // 512*4 bytes
+    __shared__ unsigned int sparseAtoms[BUFFER_SIZE+TILE_SIZE]; // 512*4 bytes
+    __shared__ unsigned int interactionBits[BUFFER_SIZE]; // 512*4 bytes
+    __shared__ uint2 sparseAtomsPrefixSumBuffer[BUFFER_SIZE]; //512*8 bytes
+    __shared__ uint2 sparseAtomsCompactionBuffer[BUFFER_SIZE*ATOM_THRESHOLD]; // 512*8*3 bytes // if we do on the fly atomicAdds we don't need this bigass buffer
     __shared__ real3 posBuffer[TILE_SIZE]; // 32*12 bytes
     __shared__ int exclusionsForX[MAX_EXCLUSIONS];
     __shared__ int bufferFull;
@@ -486,11 +485,10 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
     __syncthreads();
     
     // Loop over blocks sorted by size.
-    
+ 
     for (int i = startBlockIndex+blockIdx.x; i < startBlockIndex+numBlocks; i += gridDim.x) {
         if (threadIdx.x == blockDim.x-1) {
             numDenseAtoms = 0;
-            numSparseAtoms = 0;
         }
         real2 sortedKey = sortedBlocks[i];
         unsigned short x = (unsigned short) sortedKey.y;
@@ -528,11 +526,9 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
                 hasExclusions |= (exclusionsForX[k] == y);
             if (j < NUM_BLOCKS && delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED && !hasExclusions) {
                 // Add this tile to the buffer.
-
                 int bufferIndex = valuesInBuffer*GROUP_SIZE+threadIdx.x;
                 buffer[bufferIndex] = y;
                 valuesInBuffer++;
-
                 // cuda-memcheck --tool racecheck will throw errors about this as 
                 // RAW/WAW/WAR race condition errors. But this is safe in all instances
                 if (!bufferFull && valuesInBuffer == BUFFER_GROUPS)
@@ -540,14 +536,20 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
             }
             __syncthreads();
             if (bufferFull) {
-                storeInteractionData(x, buffer, sum, sum2, temp, atoms, numDenseAtoms, numSparseAtoms, globalIndex, tileInteractionCount, interactingTiles, interactingAtoms, periodicBoxSize, invPeriodicBoxSize, posq, posBuffer, blockCenterX, blockSizeX, maxTiles, false);
+                storeInteractionData(x, buffer, sum, sum2, interactionBits, temp, 
+                    denseAtoms, sparseAtoms, numDenseAtoms, sparseAtomsCompactionBuffer, sparseAtomsPrefixSumBuffer,
+                    globalIndex, tileInteractionCount, interactingTiles, interactingAtoms, sparseInteractionCount, sparseInteractions,
+                    periodicBoxSize, invPeriodicBoxSize, posq, posBuffer, blockCenterX, blockSizeX, maxTiles, false);
                 valuesInBuffer = 0;
                 if (threadIdx.x == 0)
                     bufferFull = false;
             }
             __syncthreads();
         }
-        storeInteractionData(x, buffer, sum, sum2, temp, atoms, numDenseAtoms, numSparseAtoms, globalIndex, tileInteractionCount, interactingTiles, interactingAtoms, periodicBoxSize, invPeriodicBoxSize, posq, posBuffer, blockCenterX, blockSizeX, maxTiles, true);
+        storeInteractionData(x, buffer, sum, sum2, interactionBits, temp, 
+            denseAtoms, sparseAtoms, numDenseAtoms, sparseAtomsCompactionBuffer, sparseAtomsPrefixSumBuffer,
+            globalIndex, tileInteractionCount, interactingTiles, interactingAtoms, sparseInteractionCount, sparseInteractions,
+            periodicBoxSize, invPeriodicBoxSize, posq, posBuffer, blockCenterX, blockSizeX, maxTiles, true);
     }
     
     // Record the positions the neighbor list is based on.

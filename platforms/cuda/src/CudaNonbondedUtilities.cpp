@@ -64,7 +64,7 @@ private:
 
 CudaNonbondedUtilities::CudaNonbondedUtilities(CudaContext& context) : context(context), cutoff(-1.0), useCutoff(false), anyExclusions(false), usePadding(true),
         exclusionIndices(NULL), exclusionRowIndices(NULL), exclusionTiles(NULL), exclusions(NULL), interactingTiles(NULL), interactingAtoms(NULL),
-        interactionCount(NULL), blockCenter(NULL), blockBoundingBox(NULL), sortedBlocks(NULL), sortedBlockCenter(NULL), sortedBlockBoundingBox(NULL),
+        interactionCount(NULL), sparseInteractions(NULL), sparseInteractionCount(NULL), blockCenter(NULL), blockBoundingBox(NULL), sortedBlocks(NULL), sortedBlockCenter(NULL), sortedBlockBoundingBox(NULL),
         oldPositions(NULL), rebuildNeighborList(NULL), blockSorter(NULL), nonbondedForceGroup(0) {
     // Decide how many thread blocks to use.
 
@@ -90,6 +90,10 @@ CudaNonbondedUtilities::~CudaNonbondedUtilities() {
         delete interactingAtoms;
     if (interactionCount != NULL)
         delete interactionCount;
+    if (sparseInteractions != NULL)
+        delete sparseInteractions;
+    if (sparseInteractionCount != NULL)
+        delete sparseInteractionCount;
     if (blockCenter != NULL)
         delete blockCenter;
     if (blockBoundingBox != NULL)
@@ -257,6 +261,13 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         interactingTiles = CudaArray::create<ushort2>(context, maxTiles, "interactingTiles");
         interactingAtoms = CudaArray::create<int>(context, CudaContext::TileSize*maxTiles, "interactingAtoms");
         interactionCount = CudaArray::create<unsigned int>(context, 1, "interactionCount");
+
+        // temporary alloc
+        //cout << "init1" << endl;
+
+        sparseInteractions = CudaArray::create<uint2>(context, sizeof(uint2)*2e6, "sparseInteractions");
+        sparseInteractionCount = CudaArray::create<unsigned int>(context, 1, "sparseInteractionCount");
+        //cout << "init2" << endl;
         int elementSize = (context.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
         blockCenter = new CudaArray(context, numAtomBlocks, 4*elementSize, "blockCenter");
         blockBoundingBox = new CudaArray(context, numAtomBlocks, 4*elementSize, "blockBoundingBox");
@@ -318,6 +329,7 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         sortBoxDataArgs.push_back(&context.getPosq().getDevicePointer());
         sortBoxDataArgs.push_back(&oldPositions->getDevicePointer());
         sortBoxDataArgs.push_back(&interactionCount->getDevicePointer());
+        sortBoxDataArgs.push_back(&sparseInteractionCount->getDevicePointer());
         sortBoxDataArgs.push_back(&rebuildNeighborList->getDevicePointer());
         findInteractingBlocksKernel = context.getKernel(interactingBlocksProgram, "findBlocksWithInteractions");
         findInteractingBlocksArgs.push_back(context.getPeriodicBoxSizePointer());
@@ -336,6 +348,8 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         findInteractingBlocksArgs.push_back(&exclusionRowIndices->getDevicePointer());
         findInteractingBlocksArgs.push_back(&oldPositions->getDevicePointer());
         findInteractingBlocksArgs.push_back(&rebuildNeighborList->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&sparseInteractionCount->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&sparseInteractions->getDevicePointer());
     }
 }
 
@@ -356,6 +370,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 
+    
     vector<unsigned int> hIA;
     interactingAtoms->download(hIA);
     vector<ushort2> hIT;
@@ -372,8 +387,19 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<unsigned int> hInteractionCount;
     interactionCount->download(hInteractionCount);
     
-    //cout << hInteractionCount[0] << endl;
 
+    vector<unsigned int> hSparseAtomsInteractionCount;
+    vector<uint2> hSparseAtomsInteractions;
+
+    sparseInteractionCount->download(hSparseAtomsInteractionCount);
+    sparseInteractions->download(hSparseAtomsInteractions);
+
+    for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
+        cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
+    }
+
+    cout << "hInteractionCount: " << hInteractionCount[0] << endl;
+    /*
     for(int i=0; i<hInteractionCount[0]; i++) {
         int ixnsPerTile = 0;
         int x = hIT[i].x;
@@ -414,6 +440,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
             cout << tPop[i] << endl;
         }
     }
+    */
 }
 
 void CudaNonbondedUtilities::computeInteractions() {
