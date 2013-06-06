@@ -386,7 +386,6 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
     vector<unsigned int> hInteractionCount;
     interactionCount->download(hInteractionCount);
-    
 
     vector<unsigned int> hSparseAtomsInteractionCount;
     vector<uint2> hSparseAtomsInteractions;
@@ -394,12 +393,11 @@ void CudaNonbondedUtilities::prepareInteractions() {
     sparseInteractionCount->download(hSparseAtomsInteractionCount);
     sparseInteractions->download(hSparseAtomsInteractions);
 
-    /*
     for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
         cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
     }
-    cout << "hInteractionCount: " << hInteractionCount[0] << endl;
-    */
+    cout << "hSparseAtomsInteractionCount: " << hSparseAtomsInteractionCount[0] << endl;
+    cout << "hTileInteractionCount: " << hInteractionCount[0] << endl;
     /*
     for(int i=0; i<hInteractionCount[0]; i++) {
         int ixnsPerTile = 0;
