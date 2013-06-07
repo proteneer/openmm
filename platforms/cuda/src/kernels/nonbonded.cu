@@ -105,7 +105,8 @@ extern "C" __global__ void computeNonbonded(
         const ushort2* __restrict__ exclusionTiles, unsigned int startTileIndex, unsigned int numTileIndices
 #ifdef USE_CUTOFF
         , const ushort2* __restrict__ tiles, const unsigned int* __restrict__ interactionCount, real4 periodicBoxSize, real4 invPeriodicBoxSize, 
-        unsigned int maxTiles, const real4* __restrict__ blockCenter, const real4* __restrict__ blockSize, const unsigned int* __restrict__ interactingAtoms
+        unsigned int maxTiles, const real4* __restrict__ blockCenter, const real4* __restrict__ blockSize, const unsigned int* __restrict__ interactingAtoms,
+        const unsigned int* __restrict__ sparseAtomInteractionCount, const uint2* __restrict__ sparseAtomInteractions
 #endif
         PARAMETER_ARGUMENTS) {
     const unsigned int totalWarps = (blockDim.x*gridDim.x)/TILE_SIZE;
@@ -588,11 +589,74 @@ extern "C" __global__ void computeNonbonded(
     }
 
     // Third loop: Compute sparse atom interactions. 
+    // Todo: figure out how to parallelize this across multiple GPUs if needed
+    
 #ifdef USE_CUTOFF
+    int lastAtomPos = sparseAtomInteractionCount[0];
 
+    if(threadIdx.x == 0) {
+        printf("lastAtomPos %d\n", lastAtomPos);
+    }
 
-
-
+    for(int i = threadIdx.x; i < lastAtomPos; i += blockDim.x) {
+        unsigned int atom1 = sparseAtomInteractions[i].x;
+        unsigned int atom2 = sparseAtomInteractions[i].y;
+        real4 posq1 = posq[atom1]; 
+        real4 posq2 = posq[atom2];
+        real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+        delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+        delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+        delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
 #endif
+        real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+        LOAD_SPARSE_PARAMETERS;
+        real3 atom1Force = make_real3(0);
+        real3 atom2Force = make_real3(0);
+        // probably don't need this check in the final kernel
+        if (r2 < CUTOFF_SQUARED) {
+            real invR = RSQRT(r2);
+            real r = RECIP(invR);
+#ifdef USE_SYMMETRIC
+            real dEdR = 0.0f;
+#else
+            real3 dEdR1 = make_real3(0);
+            real3 dEdR2 = make_real3(0);
+#endif
+#ifdef USE_EXCLUSIONS
+            bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS);
+#endif
+            real tempEnergy = 0.0f;
+            COMPUTE_INTERACTION
+            energy += tempEnergy;
+#ifdef USE_SYMMETRIC
+            delta *= dEdR;
+            atom1Force.x -= delta.x;
+            atom1Force.y -= delta.y;
+            atom1Force.z -= delta.z;
+
+            atom2Force.x += delta.x;
+            atom2Force.y += delta.y;
+            atom2Force.z += delta.z;
+#else
+            atom1Force.x -= dEdR1.x;
+            atom1Force.y -= dEdR1.y;
+            atom1Force.z -= dEdR1.z;
+
+            atom2Force.x += dEdR2.x;
+            atom2Force.y += dEdR2.y;
+            atom2Force.z += dEdR2.z;
+#endif
+        }
+        atomicAdd(&forceBuffers[atom1], static_cast<unsigned long long>((long long) (atom1Force.x*0x100000000)));
+        atomicAdd(&forceBuffers[atom1+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (atom1Force.y*0x100000000)));
+        atomicAdd(&forceBuffers[atom1+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (atom1Force.z*0x100000000)));
+        atomicAdd(&forceBuffers[atom2], static_cast<unsigned long long>((long long) (atom2Force.x*0x100000000)));
+        atomicAdd(&forceBuffers[atom2+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (atom2Force.y*0x100000000)));
+        atomicAdd(&forceBuffers[atom2+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (atom2Force.z*0x100000000)));
+
+    }
+#endif // end USE_CUTOFF
+    
     energyBuffer[blockIdx.x*blockDim.x+threadIdx.x] += energy;
 }

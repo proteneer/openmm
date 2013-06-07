@@ -410,6 +410,7 @@ void testLargeSystem() {
     for (int i = 0; i < numParticles; i++) {
         ASSERT_EQUAL_VEC(cuState.getPositions()[i], referenceState.getPositions()[i], tol);
         ASSERT_EQUAL_VEC(cuState.getVelocities()[i], referenceState.getVelocities()[i], tol);
+        cout << i << endl;
         ASSERT_EQUAL_VEC(cuState.getForces()[i], referenceState.getForces()[i], tol);
     }
     ASSERT_EQUAL_TOL(cuState.getPotentialEnergy(), referenceState.getPotentialEnergy(), tol);

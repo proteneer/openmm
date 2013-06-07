@@ -391,12 +391,51 @@ void CudaNonbondedUtilities::prepareInteractions() {
     sparseInteractionCount->download(hSparseAtomsInteractionCount);
     sparseInteractions->download(hSparseAtomsInteractions);
 
+    // atom 0 is missing interactions
+
+    cout << "ground truth interactions: " << endl;
+    for(int i=0; i<posq.size(); i++) {
+        float4 p0 = posq[0];
+        float4 pi = posq[i];
+
+        float3 delta;
+        delta.x = p0.x-pi.x;
+        delta.y = p0.y-pi.y;
+        delta.z = p0.z-pi.z;
+
+        float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+        if(r2 < paddedCutoff*paddedCutoff) {
+            cout << i << endl;
+        }
+    }
+
+    cout << "cuda interactions: " << endl;
+
+    for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
+        if(hSparseAtomsInteractions[i].x == 0) {
+            cout << hSparseAtomsInteractions[i].y << endl;
+        }
+        if(hSparseAtomsInteractions[i].y == 0) {
+            cout << hSparseAtomsInteractions[i].x << endl;
+        }
+    }
+
+    for(int i=0; i<hInteractionCount[0]; i++) {
+        cout << hIT[i].x << endl;
+        if(hIT[i].x == 0) {
+            for(int j=0; j<32; j++) {
+                cout << hIA[i*32+j] << endl;
+            }
+        }
+    }
+    
+    /*
     for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
         cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
     }
     cout << "hSparseAtomsInteractionCount: " << hSparseAtomsInteractionCount[0] << endl;
     cout << "hTileInteractionCount: " << hInteractionCount[0] << endl;
-    
+    */
     /*
     vector<int> tPop;
     for(int i=0; i<hInteractionCount[0]; i++) {
@@ -445,11 +484,15 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 
 void CudaNonbondedUtilities::computeInteractions() {
+
+    cout << "COMPUTING INTERACTIONS" << endl;
+
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);
         if (context.getComputeForceCount() == 1)
             updateNeighborListSize(); // This is the first time step, so check whether our initial guess was large enough.
     }
+
 }
 
 void CudaNonbondedUtilities::updateNeighborListSize() {
@@ -639,6 +682,14 @@ CUfunction CudaNonbondedUtilities::createInteractionKernel(const string& source,
     }
     replacements["LOAD_ATOM2_PARAMETERS"] = load2j.str();
 
+    // for sparse Interactions
+    stringstream loadSparse;
+    for(int i=0; i < (int) params.size(); i++) {
+        loadSparse<<params[i].getType()<<" "<<params[i].getName()<<"1 = global_"<<params[i].getName()<<"[atom1];\n";
+        loadSparse<<params[i].getType()<<" "<<params[i].getName()<<"2 = global_"<<params[i].getName()<<"[atom2];\n";
+    }
+    replacements["LOAD_SPARSE_PARAMETERS"] = loadSparse.str();
+
     stringstream shuffleWarpData;
     if(useShuffle) {
         shuffleWarpData << "shflPosq.x = real_shfl(shflPosq.x, tgx+1);\n";
@@ -715,6 +766,8 @@ CUfunction CudaNonbondedUtilities::createInteractionKernel(const string& source,
         forceArgs.push_back(&blockCenter->getDevicePointer());
         forceArgs.push_back(&blockBoundingBox->getDevicePointer());
         forceArgs.push_back(&interactingAtoms->getDevicePointer());
+        forceArgs.push_back(&sparseInteractionCount->getDevicePointer());
+        forceArgs.push_back(&sparseInteractions->getDevicePointer());
     }
     for (int i = 0; i < (int) params.size(); i++)
         forceArgs.push_back(&params[i].getMemory());
