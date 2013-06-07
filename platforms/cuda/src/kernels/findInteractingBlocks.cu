@@ -586,9 +586,6 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
         // Compare it to other blocks after this one in sorted order.
         
         for (int base = i+1; base < NUM_BLOCKS; base += blockDim.x) {
-
-
-
             int j = base+threadIdx.x;
             real2 sortedKey2 = (j < NUM_BLOCKS ? sortedBlocks[j] : make_real2(0));
             real4 blockCenterY = (j < NUM_BLOCKS ? sortedBlockCenter[j] : make_real4(0));
