@@ -593,10 +593,10 @@ extern "C" __global__ void computeNonbonded(
     
 #ifdef USE_CUTOFF
     int lastAtomPos = sparseAtomInteractionCount[0];
-
+    /*
     if(threadIdx.x == 0) {
         printf("lastAtomPos %d\n", lastAtomPos);
-    }
+    }*/
 
     for(int i = threadIdx.x; i < lastAtomPos; i += blockDim.x) {
         unsigned int atom1 = sparseAtomInteractions[i].x;

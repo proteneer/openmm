@@ -420,15 +420,22 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
     }
 
-    for(int i=0; i<hInteractionCount[0]; i++) {
-        //cout << hIT[i].x << endl;
-        if(hIT[i].x == 0) {
-            for(int j=0; j<32; j++) {
-                cout << hIA[i*32+j] << endl;
-            }
+    cout << "hIT:" << endl;
+
+    for(int i=0; i<hInteractionCount[0];i++) {
+        //     if(hIA[i] == 0) {
+        cout << hIT[i].x << endl;
+        //     }
+    }
+
+    cout << "hIA" << endl;
+
+    for(int i=0; i<hInteractionCount[0]*32;i++) {
+        if(hIA[i] == 0) {
+            cout << "found: " << hIA[i] << endl;
         }
     }
-    
+
     /*
     for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
         cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;

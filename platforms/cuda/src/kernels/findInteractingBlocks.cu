@@ -192,6 +192,12 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
     int& baseIndex, unsigned int* tileInteractionCount, ushort2* interactingTiles, unsigned int* interactingAtoms, unsigned int* sparseInteractionCount, uint2* sparseInteractions, 
     real4 periodicBoxSize, real4 invPeriodicBoxSize, const real4* posq, real3* posBuffer, real4 blockCenterX, real4 blockSizeX, unsigned int maxTiles, bool finish) {
 
+
+        if(x == 0 && threadIdx.x == 0) {
+            printf("\nfinish? %d\n", finish);
+        }
+        __syncthreads();
+
     const bool singlePeriodicCopy = (0.5f*periodicBoxSize.x-blockSizeX.x >= PADDED_CUTOFF &&
                                      0.5f*periodicBoxSize.y-blockSizeX.y >= PADDED_CUTOFF &&
                                      0.5f*periodicBoxSize.z-blockSizeX.z >= PADDED_CUTOFF);
@@ -234,6 +240,11 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
     const int indexInWarp = threadIdx.x % WARP_SIZE;
     // Loop over compacted interacting blocks
     for (int base = 0; base < numValid; base += BUFFER_SIZE/WARP_SIZE) {
+
+        if(x == 0 && threadIdx.x == 0) {
+            printf("base: %d , numValid: %d \n", base, numValid);
+        }
+
         for (int i = threadIdx.x/WARP_SIZE; i < BUFFER_SIZE/WARP_SIZE && base+i < numValid; i += GROUP_SIZE/WARP_SIZE) {
             // Check each atom in block Y for interactions.
 
@@ -291,19 +302,58 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         __syncthreads();
         prefixSum(sum, temp);
 
-        if( x== 0 && threadIdx.x == 0) {
+        if( x == 0 && threadIdx.x == 0) {
+            printf("sparse Atoms before compaction\n");
+            for(int i=0; i < BUFFER_SIZE; i++) {
+                printf("%d ", sparseAtoms[i]);
+            }
+            printf("\n");
+        }
+        __syncthreads();
+
+        for (int i = threadIdx.x; i < BUFFER_SIZE; i += blockDim.x)
+            sparseAtoms[i] = 0;
+        __syncthreads();
+        
+        if( x == 0 && threadIdx.x == 0) {
+            printf("dense atoms before compaction \n");
             for(int i=0; i < BUFFER_SIZE; i++) {
                 printf("%d ", denseAtoms[i]);
             }
             printf("\n");
         }
         __syncthreads();
+
+
+        // compact dense atom indices
         for (int i = threadIdx.x; i < BUFFER_SIZE; i += blockDim.x)
             if (sum[i] != (i == 0 ? 0 : sum[i-1]))
                 denseAtoms[numDenseAtoms+sum[i]-1] = buffer[base+i/WARP_SIZE]*TILE_SIZE+indexInWarp;
-        // Store to global memory
+        
         int atomsToStore = numDenseAtoms+sum[BUFFER_SIZE-1];
         bool storePartialTile = (finish && base >= numValid-BUFFER_SIZE/WARP_SIZE);
+
+        if( x == 0 && threadIdx.x == 0 ) {
+            printf("numDenseAtoms 1: %d\n", numDenseAtoms);
+            printf("atomsToStore: %d\n", atomsToStore);
+            for(int i=0; i<BUFFER_SIZE;i++) {
+                printf("%d ", sum[i]);
+            }
+        }
+
+
+
+        __syncthreads();
+        if( x == 0 && threadIdx.x == 0 ){
+            printf("dense after before compaction \n");
+            printf("Store Partial Tile For x==0? %d\n", storePartialTile);
+            for(int i=0; i<BUFFER_SIZE; i++) {
+                printf("%d ", denseAtoms[i]);
+            }
+        }
+
+        // clearly something should be written to x!
+
         int tilesToStore = (storePartialTile ? (atomsToStore+TILE_SIZE-1)/TILE_SIZE : atomsToStore/TILE_SIZE);
         if (tilesToStore > 0) {
             // this is a trick used to "allocate" some space in the final output array so we can have on the fly compaction 
@@ -312,6 +362,14 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             __syncthreads();
             if (threadIdx.x == 0)
                 numDenseAtoms = atomsToStore-tilesToStore*TILE_SIZE;
+
+            if( x == 0 && threadIdx.x == 0 ) {
+                printf("numDenseAtoms 2: %d\n", numDenseAtoms);
+                printf("atomsToStore: %d\n", atomsToStore);
+                printf("tilesToStore: %d\n", tilesToStore);
+            }
+
+
             if (baseIndex+tilesToStore <= maxTiles) {
                 if (threadIdx.x < tilesToStore)
                     interactingTiles[baseIndex+threadIdx.x] = make_ushort2(x, singlePeriodicCopy);
@@ -327,6 +385,12 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         // Store leftover dense atoms, sparse atoms have no leftovers
         if(threadIdx.x < numDenseAtoms && !storePartialTile)
             denseAtoms[threadIdx.x] = denseAtoms[tilesToStore*TILE_SIZE+threadIdx.x];
+
+
+
+
+
+
 
         // Part 2. Build neighborlist for sparsely interacting atoms
         // Compact atom indices, buffer contains interacting tile indices
@@ -422,7 +486,18 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         __syncthreads();
     }
 
+    if(x == 0 && threadIdx.x == 0) {
+        printf("\n\n\n\n");
+        printf("%d %d %d\n", numValid, numDenseAtoms, finish);
+    }
+
     if (numValid == 0 && numDenseAtoms > 0 && finish) {
+
+
+        if(x == 0 && threadIdx.x == 0) {
+            printf("entering special region");
+        }
+
         // We don't have any more tiles to process, but there were some atoms left over from a
         // previous call to this function.  Save them now.
         if (threadIdx.x == 0)
@@ -535,6 +610,15 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
         buffer[i*GROUP_SIZE+threadIdx.x] = INVALID;
     __syncthreads();
     
+
+    // init
+    for(int k=threadIdx.x; k < BUFFER_SIZE + TILE_SIZE; k++) {
+        denseAtoms[k] = 0;
+        sparseAtoms[k] = 0;
+    }
+
+    __syncthreads();
+
     // Loop over blocks sorted by size.
  
     for (int i = startBlockIndex+blockIdx.x; i < startBlockIndex+numBlocks; i += gridDim.x) {
@@ -597,6 +681,7 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
             }
             __syncthreads();
         }
+
         storeInteractionData(x, buffer, sum, sum2, interactionBits, temp, 
             denseAtoms, sparseAtoms, numDenseAtoms, sparseAtomsCompactionBuffer, sparseAtomsPrefixSumBuffer,
             globalIndex, tileInteractionCount, interactingTiles, interactingAtoms, sparseInteractionCount, sparseInteractions,
