@@ -593,13 +593,24 @@ extern "C" __global__ void computeNonbonded(
     
 #ifdef USE_CUTOFF
     int lastAtomPos = sparseAtomInteractionCount[0];
-    for(int i = threadIdx.x+blockDim.x*blockIdx.x; i < lastAtomPos; i += blockDim.x) {
+
+    for(int i = blockIdx.x*blockDim.x+threadIdx.x; i < lastAtomPos; i += blockDim.x*gridDim.x) {
         unsigned int atom1 = sparseAtomInteractions[i].x;
         unsigned int atom2 = sparseAtomInteractions[i].y;
 
-        if(atom1 == 0 || atom2 ==0)
-        printf("%d %d\n", atom1, atom2);
-    
+        //printf("%d %d %d\n",i,atom1,atom2);
+
+        /*
+        if(i == 0) {
+            printf("blockIdx.x %d,threadIdx.x %d\n", blockIdx.x, threadIdx.x);
+            printf("lastAtomPos: %d\n", lastAtomPos);
+        }*/
+
+        if(atom1 == 0) {
+            printf("%d %d %d\n", i, atom1, atom2);
+        } 
+        
+        
         real4 posq1 = posq[atom1]; 
         real4 posq2 = posq[atom2];
         real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);

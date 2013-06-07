@@ -353,6 +353,13 @@ void CudaNonbondedUtilities::initialize(const System& system) {
     }
 }
 
+bool uint2_comparator(uint2 a, uint2 b) {
+    if(a.x == b.x) {
+        return a.y < b.y;
+    }
+    return a.x<b.x;
+}
+
 void CudaNonbondedUtilities::prepareInteractions() {
     if (!useCutoff)
         return;
@@ -465,14 +472,17 @@ void CudaNonbondedUtilities::prepareInteractions() {
             }
         }
     }
-
-    /*
+    
+    //sort(hSparseAtomsInteractions.begin(), hSparseAtomsInteractions.begin()+hSparseAtomsInteractionCount[0], uint2_comparator);
+    
     for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
-        cout << hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
+        cout << i << " " <<  hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
     }
+    
+    
     cout << "hSparseAtomsInteractionCount: " << hSparseAtomsInteractionCount[0] << endl;
     cout << "hTileInteractionCount: " << hInteractionCount[0] << endl;
-    */
+    
     /*
     vector<int> tPop;
     for(int i=0; i<hInteractionCount[0]; i++) {

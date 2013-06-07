@@ -415,6 +415,10 @@ void testLargeSystem() {
     }
     ASSERT_EQUAL_TOL(cuState.getPotentialEnergy(), referenceState.getPotentialEnergy(), tol);
 
+
+    cout << "PASSED FIRST SET OF UNIT TESTS!!!! YAY!!!!" << endl;
+    return;
+
     // Now do the same thing with periodic boundary conditions.
 
     nonbonded->setNonbondedMethod(NonbondedForce::CutoffPeriodic);
