@@ -295,9 +295,9 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             for(int i=0; i < BUFFER_SIZE; i++) {
                 printf("%d ", denseAtoms[i]);
             }
-            __syncthreads();
+            printf("\n");
         }
-
+        __syncthreads();
         for (int i = threadIdx.x; i < BUFFER_SIZE; i += blockDim.x)
             if (sum[i] != (i == 0 ? 0 : sum[i-1]))
                 denseAtoms[numDenseAtoms+sum[i]-1] = buffer[base+i/WARP_SIZE]*TILE_SIZE+indexInWarp;

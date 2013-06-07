@@ -421,7 +421,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
     }
 
     for(int i=0; i<hInteractionCount[0]; i++) {
-        cout << hIT[i].x << endl;
+        //cout << hIT[i].x << endl;
         if(hIT[i].x == 0) {
             for(int j=0; j<32; j++) {
                 cout << hIA[i*32+j] << endl;
