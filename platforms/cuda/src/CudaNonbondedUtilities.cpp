@@ -370,7 +370,6 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 
-    
     vector<unsigned int> hIA;
     interactingAtoms->download(hIA);
     vector<ushort2> hIT;
@@ -388,51 +387,82 @@ void CudaNonbondedUtilities::prepareInteractions() {
     vector<unsigned int> hSparseAtomsInteractionCount;
     vector<uint2> hSparseAtomsInteractions;
 
+    vector<unsigned int> hExclusionIndices;
+    vector<unsigned int> hExclusionRowIndices;
+
+    exclusionIndices->download(hExclusionIndices);
+    exclusionRowIndices->download(hExclusionRowIndices);
+
     sparseInteractionCount->download(hSparseAtomsInteractionCount);
     sparseInteractions->download(hSparseAtomsInteractions);
 
-    // atom 0 is missing interactions
-
-    cout << "ground truth interactions: " << endl;
-    for(int i=0; i<posq.size(); i++) {
-        float4 p0 = posq[0];
-        float4 pi = posq[i];
-
-        float3 delta;
-        delta.x = p0.x-pi.x;
-        delta.y = p0.y-pi.y;
-        delta.z = p0.z-pi.z;
-
-        float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
-        if(r2 < paddedCutoff*paddedCutoff) {
-            cout << i << endl;
+    for(int atomIndex = 0; atomIndex < numAtoms; atomIndex++) {
+        vector<int> groundInteractions;
+        float4 p0 = posq[atomIndex];
+        int x = atomIndex/32;
+        int xStart = hExclusionRowIndices[x];
+        int xEnd = hExclusionRowIndices[x+1]; // wtf is this size of this?
+        //cout << "ground truth interactions for atom Index: " << atomIndex << endl;
+        for(int i=0; i<numAtoms; i++) {
+            bool skip = false;
+            int y = i/32;
+            for(int k=xStart; k<xEnd; k++) {
+                if(hExclusionIndices[k] == y) {
+                    skip = true;
+                }
+            }
+            if(!skip) {
+                float4 pi = posq[i];
+                float3 delta;
+                delta.x = p0.x-pi.x;
+                delta.y = p0.y-pi.y;
+                delta.z = p0.z-pi.z;
+                float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;  
+                if(r2 < paddedCutoff*paddedCutoff) {
+                    //cout << i << endl;
+                    groundInteractions.push_back(i);
+                }
+            }
         }
-    }
-
-    cout << "cuda interactions: " << endl;
-
-    for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
-        if(hSparseAtomsInteractions[i].x == 0) {
-            cout << hSparseAtomsInteractions[i].y << endl;
+        set<int> cudaInteractions;
+        //cout << "cuda interactions: " << endl;
+        //cout << "sparse ixns" << endl;
+        for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
+            if(hSparseAtomsInteractions[i].x == atomIndex) {
+                //cout << hSparseAtomsInteractions[i].y << endl;
+                cudaInteractions.insert(hSparseAtomsInteractions[i].y);
+            }
+            if(hSparseAtomsInteractions[i].y == atomIndex) {
+                //cout << hSparseAtomsInteractions[i].x << endl;
+                cudaInteractions.insert(hSparseAtomsInteractions[i].x);
+            }
         }
-        if(hSparseAtomsInteractions[i].y == 0) {
-            cout << hSparseAtomsInteractions[i].x << endl;
+        //cout << "hIT matches" << endl;
+        for(int i=0; i<hInteractionCount[0];i++) {
+            if(hIT[i].x == atomIndex/32) {
+                for(int j=0; j<32; j++) {
+                    if(hIA[i*32+j] != numAtoms) {
+                        //cout << hIA[i*32+j] << endl;
+                        cudaInteractions.insert(hIA[i*32+j]);
+                    }
+                }
+            }
         }
-    }
-
-    cout << "hIT:" << endl;
-
-    for(int i=0; i<hInteractionCount[0];i++) {
-        //     if(hIA[i] == 0) {
-        cout << hIT[i].x << endl;
-        //     }
-    }
-
-    cout << "hIA" << endl;
-
-    for(int i=0; i<hInteractionCount[0]*32;i++) {
-        if(hIA[i] == 0) {
-            cout << "found: " << hIA[i] << endl;
+        //cout << "hIA matches" << endl;
+        for(int i=0;i<hInteractionCount[0]*32;i++) {
+            if(hIA[i] == atomIndex) {
+                int atomStart = hIT[i/32].x*32;
+                int atomEnd = atomStart+32;
+                for(int k=atomStart; k<atomEnd; k++) {
+                    //cout << k << endl;
+                    cudaInteractions.insert(k);
+                }
+            }
+        }
+        for(int i=0; i<groundInteractions.size(); i++) {
+            if(cudaInteractions.find(groundInteractions[i]) == cudaInteractions.end()) {
+                cout << "interaction missing for atom " << atomIndex << ": " << groundInteractions[i] << endl;
+            }
         }
     }
 

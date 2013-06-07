@@ -261,6 +261,17 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
             // set bits starting from the lsb
             for (int j = 0; j < lastIndex; j++) {
                 real3 delta = pos-posBuffer[j];
+
+                /*
+                int ay = buffer[base+i]*TILE_SIZE+indexInWarp;
+                int ax = x*TILE_SIZE+j;
+                if(x==19 && ay == 8) {
+                    if( delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED ) {
+                        printf("%d %d interacts\n", ax,ay);
+                    }
+                }
+                */
+
                 interactionFlags |= (delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED) ? (1 << j) : 0;                                  
             }
 #ifdef USE_PERIODIC
@@ -296,9 +307,13 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
         
         int atomsToStore = numDenseAtoms+sum[BUFFER_SIZE-1];
         bool storePartialTile = (finish && base >= numValid-BUFFER_SIZE/WARP_SIZE);
-
-        // clearly something should be written to x!
-
+        /*
+        if(x==19 && threadIdx.x == 0) {
+            for(int i=0; i<BUFFER_SIZE+TILE_SIZE;i++) {
+                printf("%d ", denseAtoms[i]);
+            }
+        }
+        */
         int tilesToStore = (storePartialTile ? (atomsToStore+TILE_SIZE-1)/TILE_SIZE : atomsToStore/TILE_SIZE);
         if (tilesToStore > 0) {
             // this is a trick used to "allocate" some space in the final output array so we can have on the fly compaction 
@@ -372,6 +387,25 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
 
         unsigned int offset = 0;
         for(int bitcounter = 0; bitcounter < ATOM_THRESHOLD; bitcounter++) {
+            
+            /*
+            if(x == 19) {
+                for(int k=threadIdx.x; k < 30; k += blockDim.x) {
+                    char bitstring[33];
+                    bitstring[32]='\0';
+                    for(unsigned int i=0; i<32; i++) {
+                        bool s=0;
+                        if((interactionBits[k] & (1<<i)) > 0) {
+                            s=1;
+                        }
+                        bitstring[31-i] = 48 + s;
+                    }
+                    printf("INTERACTION BITS LOOP %d %s %d \n", bitcounter, bitstring, sparseAtoms[k]);
+                }
+            }
+            __syncthreads();
+            */
+
             for(int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x) {
                 unsigned int atom2 = sparseAtoms[k];
                 unsigned int bitpos = __ffs(interactionBits[k]);
@@ -472,7 +506,7 @@ __device__ void storeInteractionData(unsigned short x, unsigned short* buffer, s
  * [in] sortedBlockCenter      - sorted centers, duplicated for fast access to avoid indexing
  * [in] sortedBlockBoundingBox - sorted bounding boxes, duplicated for fast access
  * [in] exclusionIndices       - maps into exclusionRowIndices with the starting position for a given block
- * [in] exclusionRowIndices    - stores the a continuous list of exclusions
+ * [in] exclusionRowIndices    - stores the continuous list of exclusions
  *           eg: block 0 is excluded from block 3,5,6
  *               block 1 is excluded from block 3,4
  *               block 2 is excluded from block 1,3,5,6
@@ -552,11 +586,15 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
         // Compare it to other blocks after this one in sorted order.
         
         for (int base = i+1; base < NUM_BLOCKS; base += blockDim.x) {
+
+
+
             int j = base+threadIdx.x;
             real2 sortedKey2 = (j < NUM_BLOCKS ? sortedBlocks[j] : make_real2(0));
             real4 blockCenterY = (j < NUM_BLOCKS ? sortedBlockCenter[j] : make_real4(0));
             real4 blockSizeY = (j < NUM_BLOCKS ? sortedBlockBoundingBox[j] : make_real4(0));
             unsigned short y = (unsigned short) sortedKey2.y;
+
             real4 delta = blockCenterX-blockCenterY;
 #ifdef USE_PERIODIC
             delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
