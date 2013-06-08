@@ -369,14 +369,12 @@ void CudaNonbondedUtilities::prepareInteractions() {
         if (box.x < minAllowedSize || box.y < minAllowedSize || box.z < minAllowedSize)
             throw OpenMMException("The periodic box size has decreased to less than twice the nonbonded cutoff.");
     }
-
     // Compute the neighbor list.
-
     context.executeKernel(findBlockBoundsKernel, &findBlockBoundsArgs[0], context.getNumAtoms());
     blockSorter->sort(*sortedBlocks);
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
-
+    /*
     vector<unsigned int> hIA;
     interactingAtoms->download(hIA);
     vector<ushort2> hIT;
@@ -475,14 +473,10 @@ void CudaNonbondedUtilities::prepareInteractions() {
     
     //sort(hSparseAtomsInteractions.begin(), hSparseAtomsInteractions.begin()+hSparseAtomsInteractionCount[0], uint2_comparator);
     
-    for(int i=0; i<hSparseAtomsInteractionCount[0]; i++) {
-        cout << i << " " <<  hSparseAtomsInteractions[i].x << " " << hSparseAtomsInteractions[i].y << endl;
-    }
-    
     
     cout << "hSparseAtomsInteractionCount: " << hSparseAtomsInteractionCount[0] << endl;
     cout << "hTileInteractionCount: " << hInteractionCount[0] << endl;
-    
+    */
     /*
     vector<int> tPop;
     for(int i=0; i<hInteractionCount[0]; i++) {
@@ -532,7 +526,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 void CudaNonbondedUtilities::computeInteractions() {
 
-    cout << "COMPUTING INTERACTIONS" << endl;
+    //cout << "COMPUTING INTERACTIONS" << endl;
 
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);

@@ -590,29 +590,17 @@ extern "C" __global__ void computeNonbonded(
 
     // Third loop: Compute sparse atom interactions. 
     // Todo: figure out how to parallelize this across multiple GPUs if needed
-    
+    // Todo: too many atomics... use shared memory on atom1 if possible?
+
 #ifdef USE_CUTOFF
     int lastAtomPos = sparseAtomInteractionCount[0];
 
     for(int i = blockIdx.x*blockDim.x+threadIdx.x; i < lastAtomPos; i += blockDim.x*gridDim.x) {
         unsigned int atom1 = sparseAtomInteractions[i].x;
         unsigned int atom2 = sparseAtomInteractions[i].y;
-
-        //printf("%d %d %d\n",i,atom1,atom2);
-
-        /*
-        if(i == 0) {
-            printf("blockIdx.x %d,threadIdx.x %d\n", blockIdx.x, threadIdx.x);
-            printf("lastAtomPos: %d\n", lastAtomPos);
-        }*/
-
-        if(atom1 == 0) {
-            printf("%d %d %d\n", i, atom1, atom2);
-        } 
-        
-        
         real4 posq1 = posq[atom1]; 
         real4 posq2 = posq[atom2];
+        bool hasExclusions = false;
         real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
 #ifdef USE_PERIODIC
         delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;

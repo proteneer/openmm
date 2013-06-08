@@ -536,7 +536,7 @@ void CudaContext::executeKernel(CUfunction kernel, void** arguments, int threads
     }
 
     // DEBUG!
-    cuCtxSynchronize();
+    //cuCtxSynchronize();
 }
 
 int CudaContext::computeThreadBlockSize(double memory, bool preferShared) const {

@@ -410,15 +410,9 @@ void testLargeSystem() {
     for (int i = 0; i < numParticles; i++) {
         ASSERT_EQUAL_VEC(cuState.getPositions()[i], referenceState.getPositions()[i], tol);
         ASSERT_EQUAL_VEC(cuState.getVelocities()[i], referenceState.getVelocities()[i], tol);
-        cout << i << endl;
         ASSERT_EQUAL_VEC(cuState.getForces()[i], referenceState.getForces()[i], tol);
     }
     ASSERT_EQUAL_TOL(cuState.getPotentialEnergy(), referenceState.getPotentialEnergy(), tol);
-
-
-    cout << "PASSED FIRST SET OF UNIT TESTS!!!! YAY!!!!" << endl;
-    return;
-
     // Now do the same thing with periodic boundary conditions.
 
     nonbonded->setNonbondedMethod(NonbondedForce::CutoffPeriodic);
@@ -871,21 +865,21 @@ int main(int argc, char* argv[]) {
     try {
         if (argc > 1)
             platform.setPropertyDefaultValue("CudaPrecision", string(argv[1]));
-        //testCoulomb();
-        //testLJ();
-        //testExclusionsAnd14();
-        //testCutoff();
-        //testCutoff14();
-        //testPeriodic();
+        testCoulomb();
+        testLJ();
+        testExclusionsAnd14();
+        testCutoff();
+        testCutoff14();
+        testPeriodic();
         testLargeSystem();
         //testBlockInteractions(false);
         //testBlockInteractions(true);
-        //testDispersionCorrection();
-        //testChangingParameters();
-        //testParallelComputation(false);
-        //testParallelComputation(true);
-        //testSwitchingFunction(NonbondedForce::CutoffNonPeriodic);
-        //testSwitchingFunction(NonbondedForce::PME);
+        testDispersionCorrection();
+        testChangingParameters();
+        testParallelComputation(false);
+        testParallelComputation(true);
+        testSwitchingFunction(NonbondedForce::CutoffNonPeriodic);
+        testSwitchingFunction(NonbondedForce::PME);
     }
     catch(const exception& e) {
         cout << "exception: " << e.what() << endl;
