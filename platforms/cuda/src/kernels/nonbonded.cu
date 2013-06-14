@@ -370,19 +370,19 @@ extern "C" __global__ void computeNonbonded(
             includeTile = (skipTiles[currentSkipIndex] != pos);
         }
         if (includeTile) {
-
             // everything in atom1 is up for shuffling later
             real3 force1;
             const real4 shflPosq1 = posq[x*TILE_SIZE+tgx]; // used for shuffling   
             const real2 shflSigmaEpsilon1 = global_sigmaEpsilon[x*TILE_SIZE+tgx];
-            // we can do some ninja storage if need be to reduce register pressure for this
-            // at any given moment in the operation, we only need the posqs of 8 atoms, yet we store 32 of them
-            // in every thread. we could probably do, later on something like:
-            // threads 0-7   hold register components for posq1x
-            // threads 8-15  hold register components for posq1y
-            // threads 16-23 hold register components for posq1z
-            // threads 24-31 hold register components for posq1q
+            // we can do some ninja register use if need be to reduce register pressure.
+            // at any given moment in the 8x32 computation, we only need the posq of 8 atoms, yet we store 32 of them
+            // in every thread. Instead we can do
+            // threads 0-7   hold register components for posq1x for atoms i to i+8
+            // threads 8-15  hold register components for posq1y for atoms i to i+8
+            // threads 16-23 hold register components for posq1z for atoms i to i+8
+            // threads 24-31 hold register components for posq1q for atoms i to i+8
 
+            // we can do the same sigmaEpsilon as well
             // since we only need 8 at any given moment, we can break this component into two parts
             // so that threads 0-7 save the .x component and 8-15 save the .y component
             // when shuffling we load from different registers depending on component
@@ -390,23 +390,26 @@ extern "C" __global__ void computeNonbonded(
             const unsigned int atom2 = interactingAtoms[pos*TILE_SIZE+tgx];
             const real4 posq2 = posq[atom2];
 
-            // write directly to atomics intermittently maybe faster?
             // check and see register usage later
             real3 force2;
             force2.x = 0; force2.y = 0; force2.z = 0;
+
+
+
+            // writing directly to atomics intermittently may be faster?
+            // then we wouldn't force1 register either!
             real3 force1;
             force1.x = 0; force1.y = 0; force1.z = 0;
-
             const float2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
-            
             //LOAD_ATOM2_PARAMETERS;
             //DECLARE_LOCAL_PARAMETERS;
-          
             //exactly 4 loops, maybe can unroll
             for(int rowOffset = 0; rowOffset < 32; rowOffset+=8) {
                 unsigned int interactionBits = 0;
                 const unsigned int startBit = rowOffset;
                 const unsigned int endBit = rowOffset+8;
+
+                // mark in advance the points that interact
                 for(unsigned int i = startBit; i < endBit; i++) {
                     const int atom1 = x*TILE_SIZE+i;
                     // load posq1 from registers;
@@ -415,7 +418,8 @@ extern "C" __global__ void computeNonbonded(
                     tmpPosq1.y = __shfl(shflPosq1.y,i);
                     tmpPosq1.z = __shfl(shflPosq1.z,i);
                     real3 delta = make_real3(posq2.x-tmpPosq1.x,posq2.y-tmpPosq1.y,posq2.z-tmpPosq1.z);
-                    // need to take advantage of single periodic copy later, would save us a lot of trouble!
+                    // need to take advantage of single periodic copy later, would save us a lot of flops since 
+                    // we recompute distances very often
     #ifdef USE_PERIODIC
                     delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
                     delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
@@ -424,53 +428,60 @@ extern "C" __global__ void computeNonbonded(
                     real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
                     interactionBits |= (r2 < CUTOFF_SQUARED) << i;
                 }            
-                // bitPos-1 is the atom1 offset 
-                while((unsigned int bitPos = __ffs(interactionBits)) > 0) {
-                
-                    unsigned int offset = bitPos-1;
+
+
+                // compute interactions in 32x8 chunks
+                for(int i=0; i<8; i++) {
+                //while((unsigned int bitPos = __ffs(interactionBits)) > 0) {
+                    //unsigned int offset = bitPos-1;
+                    // initialize ffsReductionBuffer to zero
+                    // this must be int, not unsigned, as __ffs(interactionBits) can return 0!
+                    int offset = __ffs(interactionBits)-1;
                     const unsigned int atom1 = x*TILE_SIZE+offset;
-
+                    const unsigned int srcLane = (offset >= 0) ? offset : tgx;
+                    // all threads in a warp must issue __shfl, else result is undefined behavior
                     const real2 sigmaEpsilon1;
-                    sigmaEpsilon1.x = __shfl(shflSigmaEpsilon.x,offset);
-                    sigmaEpsilon1.y = __shfl(shflSigmaEpsilon.y,offset);
-
+                    sigmaEpsilon1.x = __shfl(shflSigmaEpsilon.x, srcLane);
+                    sigmaEpsilon1.y = __shfl(shflSigmaEpsilon.y, srcLane);
                     real4 posq1;
-                    posq1.x = __shfl(shflPosq1.x,offset);
-                    posq1.y = __shfl(shflPosq1.y,offset);
-                    posq1.z = __shfl(shflPosq1.z,offset);
-                    real3 delta = make_real3(posq2.x-posq1.x,posq2.y-posq1.y,posq2.z-posq1.z);
-    #ifdef USE_PERIODIC
-                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
-                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
-                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
-    #endif
-                    real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
-                    real invR = RSQRT(r2);
-                    real r = RECIP(invR);
-    #ifdef USE_SYMMETRIC
-                    real dEdR = 0.0f;
-    #else
-                    real3 dEdR1 = make_real3(0);
-                    real3 dEdR2 = make_real3(0);
-    #endif
-    #ifdef USE_EXCLUSIONS
-                    bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS);
-    #endif
-                    real tempEnergy = 0.0f;
-                    COMPUTE_INTERACTION
-                    energy += tempEnergy;
-    #ifdef USE_SYMMETRIC
-                    delta *= dEdR;
-                    force2.x -= delta.x;
-                    force2.y -= delta.y;
-                    force2.z -= delta.z;
-                    ffsReductionBuffer[32*(offset%8)+tgx] = dEdR;
-    #else // !USE_SYMMETRIC
-                    force.x -= dEdR1.x;
-                    force.y -= dEdR1.y;
-                    force.z -= dEdR1.z;
-                    ffsReductionBuffer[32*(offset%8)+tgx] = dEdR2;
-    #endif // end USE_SYMMETRIC
+                    posq1.x = __shfl(shflPosq1.x, srcLane);
+                    posq1.y = __shfl(shflPosq1.y, srcLane);
+                    posq1.z = __shfl(shflPosq1.z, srcLane);
+                    if(offset >= 0) 
+                        real3 delta = make_real3(posq2.x-posq1.x,posq2.y-posq1.y,posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+                        delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                        delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                        delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                        real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
+                        real invR = RSQRT(r2);
+                        real r = RECIP(invR);
+ #ifdef USE_SYMMETRIC
+                        real dEdR = 0.0f;
+#else
+                        real3 dEdR1 = make_real3(0);
+                        real3 dEdR2 = make_real3(0);
+#endif
+#ifdef USE_EXCLUSIONS
+                        bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS);
+#endif
+                        real tempEnergy = 0.0f;
+                        COMPUTE_INTERACTION
+                        energy += tempEnergy;
+#ifdef USE_SYMMETRIC
+                        delta *= dEdR;
+                        force2.x -= delta.x;
+                        force2.y -= delta.y;
+                        force2.z -= delta.z;
+                        ffsReductionBuffer[32*(offset%8)+tgx] = dEdR;
+#else // !USE_SYMMETRIC
+                        force.x -= dEdR1.x;
+                        force.y -= dEdR1.y;
+                        force.z -= dEdR1.z;
+                        ffsReductionBuffer[32*(offset%8)+tgx] = dEdR2;
+#endif // end USE_SYMMETRIC
+                    }
                 }
                 // reduce the buffer
                 //---t0-->---t1-->---t2-->---t3-->0
@@ -509,9 +520,19 @@ extern "C" __global__ void computeNonbonded(
                 real3 force1Accum.x = 0;
                 real3 force1Accum.y = 0;
                 real3 force1Accum.z = 0;
+
+                // TODO: Guarantee that no boundary edge conditions can occur here
+                // since this is pretty bloody ugly already
+
+                // cycle offset so accumulation is convenient at the end
+
+                // note unsigned int despite possible mod 32 of a negative number
+
+                // less than 20 flops .. and mods are expensive? change to tgx & (8-1) (mod 8)
+                //const unsigned int start = (tgx%8)*32+(tgx-(tgx%8)-rowOffset)%32;
                 const int start = tgx*8;
-                const int end = (tgx+1)*8;
-                for(int jj = start; jj < end; jj++) {
+                const unsigned int end = start+8;
+                for(unsigned int jj = start; jj < end; jj++) {
                     const unsigned int atomRow = tgx/4+rowOffset;
                     // recompute delta
                     real3 posq1;
@@ -529,22 +550,47 @@ extern "C" __global__ void computeNonbonded(
                     force1Accum.y += delta.y*energy;
                     force1Accum.z += delta.z*energy;
                 }
-                if(tgx % 2 == 0) {
-                    force1Accum.x += __shfl(force1Accum.x, tgx+1);
-                    force1Accum.y += __shfl(force1Accum.y, tgx+1);
-                    force1Accum.z += __shfl(force1Accum.z, tgx+1);
-                }
-                if(tgx % 4 == 0) {
-                    force1Accum.x += __shfl(force1Accum.x, tgx+2);
-                    force1Accum.y += __shfl(force1Accum.y, tgx+2);
-                    force1Accum.z += __shfl(force1Accum.z, tgx+2);
+
+                // can we ninja this so it just last set of threads to accumulate just happen to match
+
+
+                // block0, threads 0 1 2  3  4  5  6  7,  16 17 18 19 20 21 22 23 partake
+                // block1, threads 8 9 10 11 12 13 14 15, 24 25 26 27 28 29 30 31 partake
+                // .. etc
+
+                //all threads in warp must call __shfl if they are a srcLane
+
+                // 7 flops....
+                //unsigned int srcLane = ( ((tgx-rowOffset)%32)/8 == 0 || ((tgx-rowOffset)%32)/8 == 2 ) ? (tgx+8)%32 : tgx;
+                unsigned int srcLane = (tgx % 2 == 0) ? tgx+1 : tgx;
+                force1Accum.x += __shfl(force1Accum.x, srcLane);
+                force1Accum.y += __shfl(force1Accum.y, srcLane);
+                force1Accum.z += __shfl(force1Accum.z, srcLane);
+
+                //srcLane = (tgx-rowOffset)/8 == 0 ? (tgx+16)%32 : tgx;
+                srcLane = (tgx % 4 == 0) ? tgx+2 : tgx;
+                force1Accum.x += __shfl(force1Accum.x, srcLane);
+                force1Accum.y += __shfl(force1Accum.y, srcLane);
+                force1Accum.z += __shfl(force1Accum.z, srcLane);
+
+                if( tgx % 4 != 0 ) {
+                    force1Accum.x = 0;
+                    force1Accum.y = 0;
+                    force1Accum.z = 0;
                 }
                 // update in registers
-                if((tgx >= start) && (tgx < end)) {
-                    force1 = force1Accum; 
-                }
-            }
+                // this is wrong!!!!
+                // threads 0,4,8,12,16,20,24,28 holds accumulated force values for
+                // f0,f1,f2, f3, f4, f5, f6, f7  <-- loop 0
+                // f8,f9,f10,f11,f12,f13,f14,f15 <-- loop 1
+                // etc.
 
+
+                //srcLane = (
+                srcLane = (tgx >= start+rowOffset) && (tgx < end+rowOffset) ? (tgx-rowOffset)*4: tgx;
+                force1 = __shfl(force1Accum, srcLane); 
+                //}
+            }
             const int atom1 = x*TILE_SIZE+tgx;
             atomicAdd(&forceBuffers[atom1], static_cast<unsigned long long>((long long) (force1.x*0x100000000)));
             atomicAdd(&forceBuffers[atom1+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force1.y*0x100000000)));
@@ -561,33 +607,7 @@ extern "C" __global__ void computeNonbonded(
             }
         }
         pos++;
-
-            // what a fucking beast algorithm
-
-
-            
-
-            
-            
-            /*
-            // We need to apply periodic boundary conditions separately for each interaction.
-                unsigned int tj = tgx;
-                for (j = 0; j < TILE_SIZE; j++) {
-                    int atom2 = tbx+tj;
-#ifdef ENABLE_SHUFFLE
-                    real4 posq2 = shflPosq;
-#else
-                    real4 posq2 = make_real4(localData[atom2].x, localData[atom2].y, localData[atom2].z, localData[atom2].q);
-#endif
-                    real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
-#ifdef USE_PERIODIC
-                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
-                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
-                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
-#endif
-                    real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
-                    */
-
+        /*
             unsigned int atom1 = x*TILE_SIZE + tgx;
             // Load atom data for this tile.
             real4 posq1 = posq[atom1];
@@ -801,6 +821,7 @@ extern "C" __global__ void computeNonbonded(
             }
         }
         pos++;
+        */
     }
     energyBuffer[blockIdx.x*blockDim.x+threadIdx.x] += energy;
 }
