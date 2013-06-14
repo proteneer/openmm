@@ -370,6 +370,211 @@ extern "C" __global__ void computeNonbonded(
             includeTile = (skipTiles[currentSkipIndex] != pos);
         }
         if (includeTile) {
+
+            // everything in atom1 is up for shuffling later
+            real3 force1;
+            const real4 shflPosq1 = posq[x*TILE_SIZE+tgx]; // used for shuffling   
+            const real2 shflSigmaEpsilon1 = global_sigmaEpsilon[x*TILE_SIZE+tgx];
+            // we can do some ninja storage if need be
+            // since we only need 8 at any given moment, we can break this component into two parts
+            // so that threads 0-7 save the .x component and 8-15 save the .y component
+            // when shuffling we load from different registers depending on component
+            // const shflSigmaEpsilon1 = global_sigmaEpsilon[atom1];
+            const unsigned int atom2 = interactingAtoms[pos*TILE_SIZE+tgx];
+            const real4 posq2 = posq[atom2];
+
+            // write directly to atomics intermittently maybe faster?
+            // check and see register usage later
+            real3 force2;
+            force2.x = 0; force2.y = 0; force2.z = 0;
+            real3 force1;
+            force1.x = 0; force1.y = 0; force1.z = 0;
+
+            const float2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
+            
+            //LOAD_ATOM2_PARAMETERS;
+            //DECLARE_LOCAL_PARAMETERS;
+          
+            //exactly 4 loops, maybe can unroll
+            for(int rowOffset = 0; rowOffset < 32; rowOffset+=8) {
+                unsigned int interactionBits = 0;
+                const unsigned int startBit = rowOffset;
+                const unsigned int endBit = rowOffset+8;
+                for(unsigned int i = startBit; i < endBit; i++) {
+                    const int atom1 = x*TILE_SIZE+i;
+                    // load posq1 from registers;
+                    real3 tmpPosq1;
+                    tmpPosq1.x = __shfl(shflPosq1.x,i);
+                    tmpPosq1.y = __shfl(shflPosq1.y,i);
+                    tmpPosq1.z = __shfl(shflPosq1.z,i);
+                    real3 delta = make_real3(posq2.x-tmpPosq1.x,posq2.y-tmpPosq1.y,posq2.z-tmpPosq1.z);
+                    // need to take advantage of single periodic copy later, would save us a lot of trouble!
+    #ifdef USE_PERIODIC
+                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+    #endif
+                    real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
+                    interactionBits |= (r2 < CUTOFF_SQUARED) << i;
+                }            
+                // bitPos-1 is the atom1 offset 
+                while((unsigned int bitPos = __ffs(interactionBits)) > 0) {
+                
+                    unsigned int offset = bitPos-1;
+                    const unsigned int atom1 = x*TILE_SIZE+offset;
+
+                    //LOAD_ATOM1_PARAMETERS
+
+                    const real2 sigmaEpsilon1;
+                    sigmaEpsilon1.x = __shfl(global_sigmaEpsilon.x,offset);
+                    sigmaEpsilon1.y = __shfl(global_sigmaEpsilon.y,offset);
+
+                    real4 posq1;
+                    posq1.x = __shfl(shflPosq1.x,offset);
+                    posq1.y = __shfl(shflPosq1.y,offset);
+                    posq1.z = __shfl(shflPosq1.z,offset);
+                    real3 delta = make_real3(posq2.x-posq1.x,posq2.y-posq1.y,posq2.z-posq1.z);
+    #ifdef USE_PERIODIC
+                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+    #endif
+                    real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
+                
+                    // visible in scope:
+                    // sigmaEpsilon2
+                    // posq2
+                    real invR = RSQRT(r2);
+                    real r = RECIP(invR);
+
+    #ifdef USE_SYMMETRIC
+                    real dEdR = 0.0f;
+    #else
+                    real3 dEdR1 = make_real3(0);
+                    real3 dEdR2 = make_real3(0);
+    #endif
+    #ifdef USE_EXCLUSIONS
+                    bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS);
+    #endif
+                    real tempEnergy = 0.0f;
+                    COMPUTE_INTERACTION
+                    energy += tempEnergy;
+    #ifdef USE_SYMMETRIC
+                    delta *= dEdR;
+                    force2.x -= delta.x;
+                    force2.y -= delta.y;
+                    force2.z -= delta.z;
+
+                    //shflForce.x += delta.x;
+                    //shflForce.y += delta.y;
+                    //shflForce.z += delta.z;
+                    ffsReductionBuffer[32*(offset%8)+tgx] = dEdR;
+    #else // !USE_SYMMETRIC
+                    force.x -= dEdR1.x;
+                    force.y -= dEdR1.y;
+                    force.z -= dEdR1.z;
+
+                    //shflForce.x += dEdR2.x;
+                    //shflForce.y += dEdR2.y;
+                    //shflForce.z += dEdR2.z;
+                    ffsReductionBuffer[32*(offset%8)+tgx] = dEdR2;
+    #endif // end USE_SYMMETRIC
+                }
+                // reduce the buffer
+                //---t0-->---t1-->---t2-->---t3-->0
+                //---t4-->---t5-->---t6-->---t7-->1
+                //------->------->------->------->2
+                //------->------->------->------->3
+                //------->------->------->------->4
+                //------->------->------->------->5
+                //------->------->------->------->6
+                //------->------->------->------->7
+                // shuffle add 1
+                //-------t0------>-------t2------>0
+                //-------t4------>-------t6------>1
+                //--------------->--------------->2
+                //--------------->--------------->3
+                //--------------->--------------->4
+                //--------------->--------------->5
+                //--------------->--------------->6
+                //--------------->--------------->7
+                // shuffle add 2
+                //---------------t0-------------->0
+                //---------------t4-------------->1
+                //---------------t8-------------->2
+                //---------------t12------------->3
+                //---------------t16------------->4
+                //---------------t20------------->5
+                //---------------t24------------->6
+                //---------------t28------------->7
+                // t0: start 0
+                // t1: start 8
+                // t2: start 16
+                // t3: start 24
+                // t4: start 32
+                real3 force1Accum;
+                real3 force1Accum.x = 0;
+                real3 force1Accum.y = 0;
+                real3 force1Accum.z = 0;
+                const int start = tgx*8;
+                const int end = (tgx+1)*8;
+                for(int jj = start; jj < end; jj++) {
+                    const unsigned int atomRow = tgx/4+rowOffset;
+                    // retrieve the position vectors again
+                    real3 posq1;
+                    posq1.x = __shfl(shflPosq1.x, atomRow);
+                    posq1.y = __shfl(shflPosq1.y, atomRow);
+                    posq1.z = __shfl(shflPosq1.z, atomRow);
+                    real3 delta = make_real3(posq2.x-posq1.x,posq2.y-posq1.y,posq2.z-posq1.z);
+    #ifdef USE_PERIODIC
+                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+    #endif
+                    const real energy = ffsReductionBuffer[jj];
+                    force1Accum.x += delta.x*energy;
+                    force1Accum.y += delta.y*energy;
+                    force1Accum.z += delta.z*energy;
+                }
+                if(tgx % 2 == 0) {
+                    force1Accum.x += __shfl(force1Accum.x, tgx+1);
+                    force1Accum.y += __shfl(force1Accum.y, tgx+1);
+                    force1Accum.z += __shfl(force1Accum.z, tgx+1);
+                }
+                if(tgx % 4 == 0) {
+                    force1Accum.x += __shfl(force1Accum.x, tgx+2);
+                    force1Accum.y += __shfl(force1Accum.y, tgx+2);
+                    force1Accum.z += __shfl(force1Accum.z, tgx+2);
+                }
+                if(tgx < 8) {
+                    force1 += force1Accum;
+                }
+            }
+
+
+            
+
+            
+            
+            /*
+            // We need to apply periodic boundary conditions separately for each interaction.
+                unsigned int tj = tgx;
+                for (j = 0; j < TILE_SIZE; j++) {
+                    int atom2 = tbx+tj;
+#ifdef ENABLE_SHUFFLE
+                    real4 posq2 = shflPosq;
+#else
+                    real4 posq2 = make_real4(localData[atom2].x, localData[atom2].y, localData[atom2].z, localData[atom2].q);
+#endif
+                    real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                    real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+                    */
+
             unsigned int atom1 = x*TILE_SIZE + tgx;
             // Load atom data for this tile.
             real4 posq1 = posq[atom1];
@@ -405,7 +610,7 @@ extern "C" __global__ void computeNonbonded(
                 LOAD_LOCAL_PARAMETERS_FROM_GLOBAL
             }
 #ifdef USE_PERIODIC
-            if (singlePeriodicCopy) {
+            if (0 && singlePeriodicCopy) {
                 // The box is small enough that we can just translate all the atoms into a single periodic
                 // box, then skip having to apply periodic boundary conditions later.
                 real4 blockCenterX = blockCenter[x];
