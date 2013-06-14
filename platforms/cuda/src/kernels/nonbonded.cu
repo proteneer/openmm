@@ -375,7 +375,14 @@ extern "C" __global__ void computeNonbonded(
             real3 force1;
             const real4 shflPosq1 = posq[x*TILE_SIZE+tgx]; // used for shuffling   
             const real2 shflSigmaEpsilon1 = global_sigmaEpsilon[x*TILE_SIZE+tgx];
-            // we can do some ninja storage if need be
+            // we can do some ninja storage if need be to reduce register pressure for this
+            // at any given moment in the operation, we only need the posqs of 8 atoms, yet we store 32 of them
+            // in every thread. we could probably do, later on something like:
+            // threads 0-7   hold register components for posq1x
+            // threads 8-15  hold register components for posq1y
+            // threads 16-23 hold register components for posq1z
+            // threads 24-31 hold register components for posq1q
+
             // since we only need 8 at any given moment, we can break this component into two parts
             // so that threads 0-7 save the .x component and 8-15 save the .y component
             // when shuffling we load from different registers depending on component
@@ -423,11 +430,9 @@ extern "C" __global__ void computeNonbonded(
                     unsigned int offset = bitPos-1;
                     const unsigned int atom1 = x*TILE_SIZE+offset;
 
-                    //LOAD_ATOM1_PARAMETERS
-
                     const real2 sigmaEpsilon1;
-                    sigmaEpsilon1.x = __shfl(global_sigmaEpsilon.x,offset);
-                    sigmaEpsilon1.y = __shfl(global_sigmaEpsilon.y,offset);
+                    sigmaEpsilon1.x = __shfl(shflSigmaEpsilon.x,offset);
+                    sigmaEpsilon1.y = __shfl(shflSigmaEpsilon.y,offset);
 
                     real4 posq1;
                     posq1.x = __shfl(shflPosq1.x,offset);
@@ -440,13 +445,8 @@ extern "C" __global__ void computeNonbonded(
                     delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
     #endif
                     real r2 = delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
-                
-                    // visible in scope:
-                    // sigmaEpsilon2
-                    // posq2
                     real invR = RSQRT(r2);
                     real r = RECIP(invR);
-
     #ifdef USE_SYMMETRIC
                     real dEdR = 0.0f;
     #else
@@ -464,19 +464,11 @@ extern "C" __global__ void computeNonbonded(
                     force2.x -= delta.x;
                     force2.y -= delta.y;
                     force2.z -= delta.z;
-
-                    //shflForce.x += delta.x;
-                    //shflForce.y += delta.y;
-                    //shflForce.z += delta.z;
                     ffsReductionBuffer[32*(offset%8)+tgx] = dEdR;
     #else // !USE_SYMMETRIC
                     force.x -= dEdR1.x;
                     force.y -= dEdR1.y;
                     force.z -= dEdR1.z;
-
-                    //shflForce.x += dEdR2.x;
-                    //shflForce.y += dEdR2.y;
-                    //shflForce.z += dEdR2.z;
                     ffsReductionBuffer[32*(offset%8)+tgx] = dEdR2;
     #endif // end USE_SYMMETRIC
                 }
@@ -512,6 +504,7 @@ extern "C" __global__ void computeNonbonded(
                 // t2: start 16
                 // t3: start 24
                 // t4: start 32
+
                 real3 force1Accum;
                 real3 force1Accum.x = 0;
                 real3 force1Accum.y = 0;
@@ -520,7 +513,7 @@ extern "C" __global__ void computeNonbonded(
                 const int end = (tgx+1)*8;
                 for(int jj = start; jj < end; jj++) {
                     const unsigned int atomRow = tgx/4+rowOffset;
-                    // retrieve the position vectors again
+                    // recompute delta
                     real3 posq1;
                     posq1.x = __shfl(shflPosq1.x, atomRow);
                     posq1.y = __shfl(shflPosq1.y, atomRow);
@@ -546,10 +539,30 @@ extern "C" __global__ void computeNonbonded(
                     force1Accum.y += __shfl(force1Accum.y, tgx+2);
                     force1Accum.z += __shfl(force1Accum.z, tgx+2);
                 }
-                if(tgx < 8) {
-                    force1 += force1Accum;
+                // update in registers
+                if((tgx >= start) && (tgx < end)) {
+                    force1 = force1Accum; 
                 }
             }
+
+            const int atom1 = x*TILE_SIZE+tgx;
+            atomicAdd(&forceBuffers[atom1], static_cast<unsigned long long>((long long) (force1.x*0x100000000)));
+            atomicAdd(&forceBuffers[atom1+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force1.y*0x100000000)));
+            atomicAdd(&forceBuffers[atom1+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force1.z*0x100000000)));          
+//#ifdef USE_CUTOFF
+//            unsigned int atom2 = atomIndices[threadIdx.x];
+//#else
+//            unsigned int atom2 = y*TILE_SIZE + tgx;
+//#endif
+            if (atom2 < PADDED_NUM_ATOMS) {
+                atomicAdd(&forceBuffers[atom2], static_cast<unsigned long long>((long long) (force2.x*0x100000000)));
+                atomicAdd(&forceBuffers[atom2+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force2.y*0x100000000)));
+                atomicAdd(&forceBuffers[atom2+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force2.z*0x100000000)));
+            }
+        }
+        pos++;
+
+            // what a fucking beast algorithm
 
 
             
