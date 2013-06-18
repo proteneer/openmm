@@ -170,24 +170,57 @@ public:
     CudaArray& getBlockBoundingBoxes() {
         return *blockBoundingBox;
     }
-    /**
-     * Get the array whose first element contains the number of tiles with interactions.
-     */
+
+    CudaArray& getInteractionsPerBlock() {
+        return *interactionsPerBlock;
+    }
+
+    CudaArray& getInteractionBits() {
+        return *interactionBits;
+    }
+
+    CudaArray& getInteractions() {
+        return *interactions;
+    }
+
+
+    /*
     CudaArray& getInteractionCount() {
         return *interactionCount;
     }
+    */
+
+    /**
+     * Get the array whose first element contains the number of tiles with interactions.
+     */
+    
+    /*
+    CudaArray& getInteractionCount() {
+        return *interactionCount;
+    }
+    */
+
     /**
      * Get the array containing tiles with interactions.
      */
+
+
+    /*
     CudaArray& getInteractingTiles() {
         return *interactingTiles;
     }
+    */
+
     /**
      * Get the array containing the atoms in each tile with interactions.
      */
+    
+    /*
     CudaArray& getInteractingAtoms() {
         return *interactingAtoms;
     }
+    */
+
     /**
      * Get the array containing exclusion flags.
      */
@@ -260,9 +293,9 @@ private:
     CudaArray* exclusions;
     CudaArray* exclusionIndices;
     CudaArray* exclusionRowIndices;
-    CudaArray* interactingTiles;
-    CudaArray* interactingAtoms;
-    CudaArray* interactionCount;
+    CudaArray* interactionsPerBlock;
+    CudaArray* interactionBits;
+    CudaArray* interactions;
     CudaArray* blockCenter;
     CudaArray* blockBoundingBox;
     CudaArray* sortedBlocks;
@@ -279,7 +312,8 @@ private:
     std::map<std::string, std::string> kernelDefines;
     double cutoff;
     bool useCutoff, usePeriodic, anyExclusions, usePadding;
-    int startTileIndex, numTiles, startBlockIndex, numBlocks, maxTiles, numForceThreadBlocks, forceThreadBlockSize, nonbondedForceGroup, numAtoms;
+    unsigned int interactionsAllocatedPerBlock;
+    int startTileIndex, numTiles, startBlockIndex, numBlocks, numForceThreadBlocks, forceThreadBlockSize, nonbondedForceGroup, numAtoms;
 };
 
 /**

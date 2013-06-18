@@ -63,8 +63,8 @@ private:
 };
 
 CudaNonbondedUtilities::CudaNonbondedUtilities(CudaContext& context) : context(context), cutoff(-1.0), useCutoff(false), anyExclusions(false), usePadding(true),
-        exclusionIndices(NULL), exclusionRowIndices(NULL), exclusionTiles(NULL), exclusions(NULL), interactingTiles(NULL), interactingAtoms(NULL),
-        interactionCount(NULL), blockCenter(NULL), blockBoundingBox(NULL), sortedBlocks(NULL), sortedBlockCenter(NULL), sortedBlockBoundingBox(NULL),
+        exclusionIndices(NULL), exclusionRowIndices(NULL), exclusionTiles(NULL), exclusions(NULL), interactions(NULL), interactionsPerBlock(NULL),
+        interactionBits(NULL), blockCenter(NULL), blockBoundingBox(NULL), sortedBlocks(NULL), sortedBlockCenter(NULL), sortedBlockBoundingBox(NULL),
         oldPositions(NULL), rebuildNeighborList(NULL), blockSorter(NULL), nonbondedForceGroup(0) {
     // Decide how many thread blocks to use.
 
@@ -84,12 +84,12 @@ CudaNonbondedUtilities::~CudaNonbondedUtilities() {
         delete exclusionTiles;
     if (exclusions != NULL)
         delete exclusions;
-    if (interactingTiles != NULL)
-        delete interactingTiles;
-    if (interactingAtoms != NULL)
-        delete interactingAtoms;
-    if (interactionCount != NULL)
-        delete interactionCount;
+    if (interactions != NULL)
+        delete interactions;
+    if (interactionsPerBlock != NULL)
+        delete interactionsPerBlock;
+    if (interactionBits != NULL)
+        delete interactionBits;
     if (blockCenter != NULL)
         delete blockCenter;
     if (blockBoundingBox != NULL)
@@ -249,14 +249,21 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         // Select a size for the arrays that hold the neighbor list.  We have to make a fairly
         // arbitrary guess, but if this turns out to be too small we'll increase it later.
 
-        maxTiles = 20*numAtomBlocks;
+        interactionsAllocatedPerBlock = max(1, 100*numAtomBlocks);
+        /*
         if (maxTiles > numTiles)
             maxTiles = numTiles;
         if (maxTiles < 1)
             maxTiles = 1;
-        interactingTiles = CudaArray::create<int>(context, maxTiles, "interactingTiles");
-        interactingAtoms = CudaArray::create<int>(context, CudaContext::TileSize*maxTiles, "interactingAtoms");
-        interactionCount = CudaArray::create<unsigned int>(context, 1, "interactionCount");
+        */
+
+        cout << interactionsAllocatedPerBlock << endl;
+
+        cout << "numAtomBlocks: " << numAtomBlocks << endl;
+
+        interactions = CudaArray::create<unsigned int>(context, interactionsAllocatedPerBlock*numAtomBlocks, "interactions");
+        interactionBits = CudaArray::create<unsigned int>(context, interactionsAllocatedPerBlock*numAtomBlocks, "interactionBits");
+        interactionsPerBlock = CudaArray::create<unsigned int>(context, numAtomBlocks, "interactionsPerBlock");
         int elementSize = (context.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
         blockCenter = new CudaArray(context, numAtomBlocks, 4*elementSize, "blockCenter");
         blockBoundingBox = new CudaArray(context, numAtomBlocks, 4*elementSize, "blockBoundingBox");
@@ -274,8 +281,10 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         }
         rebuildNeighborList = CudaArray::create<int>(context, 1, "rebuildNeighborList");
         blockSorter = new CudaSort(context, new BlockSortTrait(context.getUseDoublePrecision()), numAtomBlocks);
-        vector<unsigned int> count(1, 0);
-        interactionCount->upload(count);
+        // vector<unsigned int> count(1, 0);
+        
+        // find max interaction
+        // interactionCount->upload(count);
     }
 
     // Create kernels.
@@ -309,6 +318,7 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         findBlockBoundsArgs.push_back(&blockBoundingBox->getDevicePointer());
         findBlockBoundsArgs.push_back(&rebuildNeighborList->getDevicePointer());
         findBlockBoundsArgs.push_back(&sortedBlocks->getDevicePointer());
+
         sortBoxDataKernel = context.getKernel(interactingBlocksProgram, "sortBoxData");
         sortBoxDataArgs.push_back(&sortedBlocks->getDevicePointer());
         sortBoxDataArgs.push_back(&blockCenter->getDevicePointer());
@@ -317,16 +327,17 @@ void CudaNonbondedUtilities::initialize(const System& system) {
         sortBoxDataArgs.push_back(&sortedBlockBoundingBox->getDevicePointer());
         sortBoxDataArgs.push_back(&context.getPosq().getDevicePointer());
         sortBoxDataArgs.push_back(&oldPositions->getDevicePointer());
-        sortBoxDataArgs.push_back(&interactionCount->getDevicePointer());
+        //sortBoxDataArgs.push_back(&interactionCount->getDevicePointer());
         sortBoxDataArgs.push_back(&rebuildNeighborList->getDevicePointer());
+
         findInteractingBlocksKernel = context.getKernel(interactingBlocksProgram, "findBlocksWithInteractions");
         findInteractingBlocksArgs.push_back(context.getPeriodicBoxSizePointer());
         findInteractingBlocksArgs.push_back(context.getInvPeriodicBoxSizePointer());
-        findInteractingBlocksArgs.push_back(&interactionCount->getDevicePointer());
-        findInteractingBlocksArgs.push_back(&interactingTiles->getDevicePointer());
-        findInteractingBlocksArgs.push_back(&interactingAtoms->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&interactions->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&interactionBits->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&interactionsPerBlock->getDevicePointer());
+        findInteractingBlocksArgs.push_back(&interactionsAllocatedPerBlock);
         findInteractingBlocksArgs.push_back(&context.getPosq().getDevicePointer());
-        findInteractingBlocksArgs.push_back(&maxTiles);
         findInteractingBlocksArgs.push_back(&startBlockIndex);
         findInteractingBlocksArgs.push_back(&numBlocks);
         findInteractingBlocksArgs.push_back(&sortedBlocks->getDevicePointer());
@@ -355,43 +366,88 @@ void CudaNonbondedUtilities::prepareInteractions() {
     blockSorter->sort(*sortedBlocks);
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
+
+    /*
+    vector<unsigned int>hInteractionsPerBlock;
+    interactionsPerBlock->download(hInteractionsPerBlock);
+
+    for(int i=0; i<hInteractionsPerBlock.size(); i++) {
+        cout << hInteractionsPerBlock[i] << endl;
+    }
+
+    vector<unsigned int>hInteractions;
+    interactions->download(hInteractions);
+    for(int i=0; i<numBlocks; i++) {
+        cout << i << ":" << endl;
+        for(int j=0; j < hInteractionsPerBlock[i]; j++) {
+            cout << hInteractions[i*interactionsAllocatedPerBlock+j] << " ";
+        }
+        cout << endl;
+    }
+    */
+
+    
+
 }
 
 void CudaNonbondedUtilities::computeInteractions() {
+    
+    /*
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);
         if (context.getComputeForceCount() == 1)
             updateNeighborListSize(); // This is the first time step, so check whether our initial guess was large enough.
     }
+    */
 }
 
 void CudaNonbondedUtilities::updateNeighborListSize() {
+
+    /*
+    cout << "updating neighborlist size" << endl;
     if (!useCutoff)
         return;
-    unsigned int* pinnedInteractionCount = (unsigned int*) context.getPinnedBuffer();
-    interactionCount->download(pinnedInteractionCount);
-    if (pinnedInteractionCount[0] <= (unsigned int) maxTiles)
+
+    // manual reduction on CPU for now
+    vector<unsigned int> maxInteractionsPerBlock;
+
+    interactionsPerBlock->download(maxInteractionsPerBlock);
+
+    //unsigned int* maxInteractionsPerBlock = (unsigned int*) context.getPinnedBuffer();
+    //interactionsPerBlock->download(maxInteractionsPerBlock);
+
+    int max = 0;
+    for(int i=0; i<maxInteractionsPerBlock.size(); i++) {
+        max = maxInteractionsPerBlock[i] > max ? maxInteractionsPerBlock[i] : max;
+    }
+    //unsigned int* pinnedInteractionCount = (unsigned int*) context.getPinnedBuffer();
+    //interactionCount->download(pinnedInteractionCount);
+    if (max <= (unsigned int) interactionsAllocatedPerBlock)
         return;
 
     // The most recent timestep had too many interactions to fit in the arrays.  Make the arrays bigger to prevent
     // this from happening in the future.
 
-    maxTiles = (int) (1.2*pinnedInteractionCount[0]);
-    int totalTiles = context.getNumAtomBlocks()*(context.getNumAtomBlocks()+1)/2;
-    if (maxTiles > totalTiles)
-        maxTiles = totalTiles;
-    delete interactingTiles;
-    delete interactingAtoms;
-    interactingTiles = NULL; // Avoid an error in the destructor if the following allocation fails
-    interactingAtoms = NULL;
-    interactingTiles = CudaArray::create<int>(context, maxTiles, "interactingTiles");
-    interactingAtoms = CudaArray::create<int>(context, CudaContext::TileSize*maxTiles, "interactingAtoms");
-    if (forceArgs.size() > 0)
-        forceArgs[7] = &interactingTiles->getDevicePointer();
-    findInteractingBlocksArgs[3] = &interactingTiles->getDevicePointer();
-    if (forceArgs.size() > 0)
-        forceArgs[14] = &interactingAtoms->getDevicePointer();
-    findInteractingBlocksArgs[4] = &interactingAtoms->getDevicePointer();
+    //interactionsAllocatedPerBlock = (int) (1.2*max);
+    interactionsAllocatedPerBlock = 70*numBlocks;
+    //int totalTiles = context.getNumAtomBlocks()*(context.getNumAtomBlocks()+1)/2;
+    //if (maxTiles > totalTiles)
+    //    maxTiles = totalTiles;
+    delete interactions;
+    delete interactionBits;
+    interactions = NULL; // Avoid an error in the destructor if the following allocation fails
+    interactionBits = NULL;
+    interactions = CudaArray::create<unsigned int>(context, interactionsAllocatedPerBlock*numBlocks, "interactions");
+    interactionBits = CudaArray::create<unsigned int>(context, interactionsAllocatedPerBlock*numBlocks, "interactionBits");
+
+    if (forceArgs.size() > 0) {
+        forceArgs[7] = &interactions->getDevicePointer();
+        forceArgs[8] = &interactionBits->getDevicePointer();
+    }
+
+    findInteractingBlocksArgs[3] = &interactions->getDevicePointer();
+    findInteractingBlocksArgs[4] = &interactionBits->getDevicePointer();
+    
     if (context.getUseDoublePrecision()) {
         vector<double4> oldPositionsVec(numAtoms, make_double4(1e30, 1e30, 1e30, 0));
         oldPositions->upload(oldPositionsVec);
@@ -400,6 +456,7 @@ void CudaNonbondedUtilities::updateNeighborListSize() {
         vector<float4> oldPositionsVec(numAtoms, make_float4(1e30f, 1e30f, 1e30f, 0));
         oldPositions->upload(oldPositionsVec);
     }
+    */
 }
 
 void CudaNonbondedUtilities::setUsePadding(bool padding) {
@@ -611,6 +668,7 @@ CUfunction CudaNonbondedUtilities::createInteractionKernel(const string& source,
     // Set arguments to the Kernel.
 
     int index = 0;
+
     forceArgs.push_back(&context.getForce().getDevicePointer());
     forceArgs.push_back(&context.getEnergyBuffer().getDevicePointer());
     forceArgs.push_back(&context.getPosq().getDevicePointer());
@@ -619,14 +677,14 @@ CUfunction CudaNonbondedUtilities::createInteractionKernel(const string& source,
     forceArgs.push_back(&startTileIndex);
     forceArgs.push_back(&numTiles);
     if (useCutoff) {
-        forceArgs.push_back(&interactingTiles->getDevicePointer());
-        forceArgs.push_back(&interactionCount->getDevicePointer());
+        forceArgs.push_back(&interactions->getDevicePointer());
+        forceArgs.push_back(&interactionBits->getDevicePointer());
+        forceArgs.push_back(&interactionsPerBlock->getDevicePointer());
+        forceArgs.push_back(&interactionsAllocatedPerBlock);
         forceArgs.push_back(context.getPeriodicBoxSizePointer());
         forceArgs.push_back(context.getInvPeriodicBoxSizePointer());
-        forceArgs.push_back(&maxTiles);
         forceArgs.push_back(&blockCenter->getDevicePointer());
         forceArgs.push_back(&blockBoundingBox->getDevicePointer());
-        forceArgs.push_back(&interactingAtoms->getDevicePointer());
     }
     for (int i = 0; i < (int) params.size(); i++)
         forceArgs.push_back(&params[i].getMemory());

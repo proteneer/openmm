@@ -93,9 +93,15 @@ void CudaCalcForcesAndEnergyKernel::beginComputation(ContextImpl& context, bool 
 }
 
 double CudaCalcForcesAndEnergyKernel::finishComputation(ContextImpl& context, bool includeForces, bool includeEnergy, int groups) {
+
+    cout << "attempting to finish computation" << endl;
+
     cu.getBondedUtilities().computeInteractions(groups);
-    if ((groups&(1<<cu.getNonbondedUtilities().getForceGroup())) != 0)
+    if ((groups&(1<<cu.getNonbondedUtilities().getForceGroup())) != 0) {
+     cout << "computing nonbonded ixns" << endl;
         cu.getNonbondedUtilities().computeInteractions();
+
+    }
     cu.getIntegrationUtilities().distributeForcesFromVirtualSites();
     double sum = 0.0;
     if (includeEnergy) {
@@ -2088,6 +2094,7 @@ void CudaCalcGBSAOBCForceKernel::initialize(const System& system, const GBSAOBCF
 }
 
 double CudaCalcGBSAOBCForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+    /*
     CudaNonbondedUtilities& nb = cu.getNonbondedUtilities();
     if (!hasCreatedKernels) {
         // These Kernels cannot be created in initialize(), because the CudaNonbondedUtilities has not been initialized yet then.
@@ -2175,6 +2182,7 @@ double CudaCalcGBSAOBCForceKernel::execute(ContextImpl& context, bool includeFor
     void* reduceForceArgs[] = {&bornForce->getDevicePointer(), &cu.getEnergyBuffer().getDevicePointer(), &params->getDevicePointer(),
             &bornRadii->getDevicePointer(), &obcChain->getDevicePointer()};
     cu.executeKernel(reduceBornForceKernel, &reduceForceArgs[0], cu.getPaddedNumAtoms());
+    */
     return 0.0;
 }
 
@@ -2877,6 +2885,7 @@ void CudaCalcCustomGBForceKernel::initialize(const System& system, const CustomG
 }
 
 double CudaCalcCustomGBForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+    /*
     CudaNonbondedUtilities& nb = cu.getNonbondedUtilities();
     if (!hasInitializedKernels) {
         hasInitializedKernels = true;
@@ -3048,6 +3057,7 @@ double CudaCalcCustomGBForceKernel::execute(ContextImpl& context, bool includeFo
     cu.executeKernel(perParticleEnergyKernel, &perParticleEnergyArgs[0], cu.getPaddedNumAtoms());
     if (needParameterGradient)
         cu.executeKernel(gradientChainRuleKernel, &gradientChainRuleArgs[0], cu.getPaddedNumAtoms());
+    */
     return 0.0;
 }
 

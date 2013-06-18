@@ -99,12 +99,26 @@ static __inline__ __device__ long long real_shfl(long long var, int srcLane) {
  * [in]interactingAtoms - a list of interactions within a given tile     
  *
  */
+
+// Seperate into two kernels, exclusions and no exclusions in order to optimize occupancy and register usage
+
 extern "C" __global__ void computeNonbonded(
-        unsigned long long* __restrict__ forceBuffers, real* __restrict__ energyBuffer, const real4* __restrict__ posq, const tileflags* __restrict__ exclusions,
-        const ushort2* __restrict__ exclusionTiles, unsigned int startTileIndex, unsigned int numTileIndices
+        unsigned long long* __restrict__ forceBuffers, 
+        real* __restrict__ energyBuffer, 
+        const real4* __restrict__ posq, 
+        const tileflags* __restrict__ exclusions,
+        const ushort2* __restrict__ exclusionTiles, 
+        unsigned int startTileIndex, 
+        unsigned int numTileIndices
 #ifdef USE_CUTOFF
-        , const int* __restrict__ tiles, const unsigned int* __restrict__ interactionCount, real4 periodicBoxSize, real4 invPeriodicBoxSize, 
-        unsigned int maxTiles, const real4* __restrict__ blockCenter, const real4* __restrict__ blockSize, const unsigned int* __restrict__ interactingAtoms
+        , const unsigned int* __restrict__ interactions, 
+        const unsigned int* __restrict__ interactionBits,
+        const unsigned int* __restrict__ interactionsPerBlock,
+        const unsigned int interactionsAllocatedPerBlock,
+        real4 periodicBoxSize, 
+        real4 invPeriodicBoxSize, 
+        const real4* __restrict__ blockCenter, 
+        const real4* __restrict__ blockSize
 #endif
         PARAMETER_ARGUMENTS) {
     const unsigned int totalWarps = (blockDim.x*gridDim.x)/TILE_SIZE;
@@ -190,6 +204,7 @@ extern "C" __global__ void computeNonbonded(
 #endif
             }
         }
+        /*
         else {
             // This is an off-diagonal tile.
             unsigned int j = y*TILE_SIZE + tgx;
@@ -289,6 +304,7 @@ extern "C" __global__ void computeNonbonded(
                 // 0 1 2 3 4 5 6 7 -> 1 2 3 4 5 6 7 0
                 tj = (tj + 1) & (TILE_SIZE - 1);
             }
+            
             const unsigned int offset = y*TILE_SIZE + tgx;
             // write results for off diagonal tiles
 #ifdef ENABLE_SHUFFLE
@@ -301,6 +317,8 @@ extern "C" __global__ void computeNonbonded(
             atomicAdd(&forceBuffers[offset+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (localData[threadIdx.x].fz*0x100000000)));
 #endif
         }
+
+        */
         // Write results for on and off diagonal tiles
         const unsigned int offset = x*TILE_SIZE + tgx;
         atomicAdd(&forceBuffers[offset], static_cast<unsigned long long>((long long) (force.x*0x100000000)));
@@ -308,6 +326,7 @@ extern "C" __global__ void computeNonbonded(
         atomicAdd(&forceBuffers[offset+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force.z*0x100000000)));
     }
 
+    /*
     // Second loop: tiles without exclusions, either from the neighbor list (with cutoff) or just enumerating all
     // of them (no cutoff).
 #ifdef USE_CUTOFF
@@ -354,6 +373,8 @@ extern "C" __global__ void computeNonbonded(
             }
 
             // Skip over tiles that have exclusions, since they were already processed.
+
+            // Rebuild neighbourlist instead of computing the force. 
 
             while (skipTiles[tbx+TILE_SIZE-1] < pos) {
                 if (skipBase+tgx < NUM_TILES_WITH_EXCLUSIONS) {
@@ -584,5 +605,8 @@ extern "C" __global__ void computeNonbonded(
         }
         pos++;
     }
+    */
     energyBuffer[blockIdx.x*blockDim.x+threadIdx.x] += energy;
+
+    
 }
