@@ -1,7 +1,7 @@
 #define GROUP_SIZE 256
 
 //crashes with BUFFER_GROUPS = 1?
-#define BUFFER_GROUPS 2
+#define BUFFER_GROUPS 3
 #define BUFFER_SIZE BUFFER_GROUPS*GROUP_SIZE
 #define WARP_SIZE 32
 #define INVALID 0xFFFF
@@ -286,7 +286,6 @@ extern "C" __global__ void findBlocksWithInteractions(
             // if the buffer is full, we store data for these tiles
 
             if (bufferFull) {
-                
                 // The buffer is full, so we need to compact it and write out results.  Start by doing a parallel prefix sum.
 
                 for (int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x) {
@@ -335,7 +334,7 @@ extern "C" __global__ void findBlocksWithInteractions(
                         } else {
 #endif
                             for (int m = 0; m < TILE_SIZE; m++) {
-                                real3 delta = pos-posBuffer[m];
+                                const real3 delta = pos-posBuffer[m];
                                 //interacts |= (delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED);
                                 ixnBits |= (delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED) << m;
                             }
@@ -381,6 +380,10 @@ extern "C" __global__ void findBlocksWithInteractions(
 
                 for (int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x)
                     buffer[k] = INVALID;
+
+                valuesInBuffer = 0;
+                if(threadIdx.x == 0)
+                    bufferFull = false;
 
                 __syncthreads();
             } // buffer full for block x
