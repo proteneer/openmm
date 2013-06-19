@@ -255,10 +255,10 @@ extern "C" __global__ void findBlocksWithInteractions(
         // Compare block x to other blocks after this one in sorted order.
         for (int base = i+1; base < NUM_BLOCKS; base += blockDim.x) {
             const int j = base+threadIdx.x;
-            real2 sortedKey2 = (j < NUM_BLOCKS ? sortedBlocks[j] : make_real2(0));
-            real4 blockCenterY = (j < NUM_BLOCKS ? sortedBlockCenter[j] : make_real4(0));
-            real4 blockSizeY = (j < NUM_BLOCKS ? sortedBlockBoundingBox[j] : make_real4(0));
-            unsigned short y = (unsigned short) sortedKey2.y;
+            const real2 sortedKey2 = (j < NUM_BLOCKS ? sortedBlocks[j] : make_real2(0));
+            const real4 blockCenterY = (j < NUM_BLOCKS ? sortedBlockCenter[j] : make_real4(0));
+            const real4 blockSizeY = (j < NUM_BLOCKS ? sortedBlockBoundingBox[j] : make_real4(0));
+            const unsigned short y = (unsigned short) sortedKey2.y;
             real4 delta = blockCenterX-blockCenterY;
 #ifdef USE_PERIODIC
             delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
@@ -268,7 +268,7 @@ extern "C" __global__ void findBlocksWithInteractions(
             delta.x = max(0.0f, fabs(delta.x)-blockSizeX.x-blockSizeY.x);
             delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
             delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
-            bool hasExclusions = false;
+            const bool hasExclusions = false;
             for (int k = 0; k < numExclusions; k++)
                 hasExclusions |= (exclusionsForX[k] == y);
 
