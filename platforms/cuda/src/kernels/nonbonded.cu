@@ -203,9 +203,7 @@ extern "C" __global__ void computeNonbonded(
                 excl >>= 1;
 #endif
             }
-        }
-        /*
-        else {
+        } else {
             // This is an off-diagonal tile.
             unsigned int j = y*TILE_SIZE + tgx;
             real4 shflPosq = posq[j];
@@ -317,14 +315,173 @@ extern "C" __global__ void computeNonbonded(
             atomicAdd(&forceBuffers[offset+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (localData[threadIdx.x].fz*0x100000000)));
 #endif
         }
-
-        */
         // Write results for on and off diagonal tiles
         const unsigned int offset = x*TILE_SIZE + tgx;
         atomicAdd(&forceBuffers[offset], static_cast<unsigned long long>((long long) (force.x*0x100000000)));
         atomicAdd(&forceBuffers[offset+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force.y*0x100000000)));
         atomicAdd(&forceBuffers[offset+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force.z*0x100000000)));
     }
+
+    // each threadblock processes one row of interacting atoms in the neighborlist entry
+    // ie. each threadblock computes interactions for one row of atoms
+
+    // pos = first block to process
+    // end = last block to process
+
+    __shared__ real4  sharedPosq1[TILE_SIZE];
+    __shared__ float2 sharedSigmaEpsilon1[TILE_SIZE];
+
+    // forces are accumulated in every warp
+    __shared__ real3  sharedForces1[THREAD_BLOCK_SIZE];
+
+    // TODO: parallelize
+    for(unsigned int pos = blockIdx.x; pos < NUM_BLOCKS; pos += gridDim.x) {
+        
+        // TODO: Used to use shuffle, but it will use more resources and probably be slower
+        // since each warp will need to load in the posqs and forces. But we're probably bottlenecked anyways
+        // by memory at this point. 
+        const unsigned int x = pos;
+        
+        const real4 blockSizeX = blockSize[x];
+        const real4 blockCenterX = blockCenter[x];
+        const bool singlePeriodicCopy = (0.5f*periodicBoxSize.x-blockSizeX.x >= CUTOFF &&
+                                         0.5f*periodicBoxSize.y-blockSizeX.y >= CUTOFF &&
+                                         0.5f*periodicBoxSize.z-blockSizeX.z >= CUTOFF);
+        
+        if(threadIdx.x < TILE_SIZE) {
+            real4 posq1 = posq[x*TILE_SIZE+threadIdx.x];
+            // test if ternaries are faster than ifs later
+#ifdef USE_PERIODIC
+            if(singlePeriodicCopy) {
+                posq1.x -= floor((posq1.x-blockCenterX.x)*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                posq1.y -= floor((posq1.y-blockCenterX.y)*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                posq1.z -= floor((posq1.z-blockCenterX.z)*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+            }
+#endif
+            sharedPosq1[threadIdx.x] = posq1;
+            sharedSigmaEpsilon1[threadIdx.x]=global_sigmaEpsilon[x*TILE_SIZE+threadIdx.x];
+        }
+        sharedForces1[threadIdx.x].x = 0.0f; 
+        sharedForces1[threadIdx.x].y = 0.0f; 
+        sharedForces1[threadIdx.x].z = 0.0f;
+        __syncthreads();
+        const unsigned int ixnsAllocated = interactionsAllocatedPerBlock;
+        const unsigned int numIxns = interactionsPerBlock[blockIdx.x];
+
+        for(unsigned int k = threadIdx.x; k < numIxns; k += blockDim.x) {
+            const unsigned int atom2 = interactions[x*ixnsAllocated+k];
+            if(x == 0) {
+                printf("atom2: %d, tid: %d\n", atom2, threadIdx.x);
+            }
+            unsigned int ixnBits = interactionBits[x*ixnsAllocated+k];
+            const real2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
+            real4 posq2 = posq[atom2];
+#ifdef USE_PERIODIC
+            if(singlePeriodicCopy) {
+                posq2.x -= floor((posq2.x-blockCenterX.x)*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                posq2.y -= floor((posq2.y-blockCenterX.y)*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                posq2.z -= floor((posq2.z-blockCenterX.z)*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+            }
+#endif
+            real3 force2; 
+            force2.x = 0; 
+            force2.y = 0; 
+            force2.z = 0;
+            unsigned int tj = tgx;
+            // to do, try __ffs accumulation with atomicAdd into shared memory
+            for(unsigned int j = 0; j < TILE_SIZE; j++) {
+                const unsigned int atom1 = x*TILE_SIZE+tj;
+                const real4 posq1 = sharedPosq1[tj];
+                real3 delta = make_real3(posq2.x-posq1.x, posq2.x-posq1.y, posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+                if(!singlePeriodicCopy) {
+                    delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+                }
+#endif
+                const real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+                if(r2 < CUTOFF_SQUARED) {
+                    const real invR = RSQRT(r2);
+                    const real r = RECIP(invR);
+                    const real2 sigmaEpsilon1 = sharedSigmaEpsilon1[tj];
+#ifdef USE_SYMMETRIC
+                    real dEdR = 0.0f;
+#else
+                    real3 dEdR1 = make_real3(0);
+                    real3 dEdR2 = make_real3(0);
+#endif
+#ifdef USE_EXCLUSIONS
+                    const bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS);
+#endif
+                    real tempEnergy = 0.0f;
+                    COMPUTE_INTERACTION
+                    energy += tempEnergy;
+#ifdef USE_SYMMETRIC
+                    delta *= dEdR;
+                    sharedForces1[tbx+tj].x -= delta.x;
+                    sharedForces1[tbx+tj].y -= delta.y;
+                    sharedForces1[tbx+tj].z -= delta.z;
+                    force2.x += delta.x;     
+                    force2.y += delta.y;
+                    force2.z += delta.z;
+#else // !USE_SYMMETRIC
+                    sharedForces1[tbx+tj].x -= dEdR1.x;
+                    sharedForces1[tbx+tj].y -= dEdR1.y;
+                    sharedForces1[tbx+tj].z -= dEdR1.z;
+                    force2.x += dEdR2.x;
+                    force2.y += dEdR2.y;
+                    force2.z += dEdR2.z; 
+#endif // end USE_SYMMETRIC
+                }
+                tj = (tj + 1) & (TILE_SIZE - 1);
+            } // tile complete
+
+            // add force contributions to atom2 atomically
+            if(atom2 < NUM_ATOMS) {
+                atomicAdd(&forceBuffers[atom2], static_cast<unsigned long long>((long long) (force2.x*0x100000000)));
+                atomicAdd(&forceBuffers[atom2+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force2.y*0x100000000)));
+                atomicAdd(&forceBuffers[atom2+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force2.z*0x100000000)));
+            }
+        } 
+
+        if(threadIdx.x == 0 && x == 0) {
+            for(int i=0; i < 32; i++) {
+                printf("[%5.2f %5.2f %5.2f] ", sharedForces1[i].x, sharedForces1[i].y, sharedForces1[i].z);
+            }
+            printf("\n");
+        }
+
+        // reduce forces along atom1's dimension after all interacting atoms for block x has been processed
+        __syncthreads();
+        if(threadIdx.x < 128) {
+            sharedForces1[threadIdx.x].x += sharedForces1[threadIdx.x+128].x;
+            sharedForces1[threadIdx.x].y += sharedForces1[threadIdx.x+128].y;
+            sharedForces1[threadIdx.x].z += sharedForces1[threadIdx.x+128].z;
+        }
+
+        __syncthreads();
+        if(threadIdx.x < 64) {
+            sharedForces1[threadIdx.x].x += sharedForces1[threadIdx.x+64].x;
+            sharedForces1[threadIdx.x].y += sharedForces1[threadIdx.x+64].y;
+            sharedForces1[threadIdx.x].z += sharedForces1[threadIdx.x+64].z;
+        }
+            
+        __syncthreads();
+        if(threadIdx.x < 32) {
+            const unsigned int atom1 = x*TILE_SIZE+threadIdx.x;
+            real3 force1 = sharedForces1[threadIdx.x];
+            force1.x += sharedForces1[threadIdx.x+32].x;
+            force1.y += sharedForces1[threadIdx.x+32].y;
+            force1.z += sharedForces1[threadIdx.x+32].z;
+            forceBuffers[atom1] += static_cast<unsigned long long>((long long) (force1.x*0x100000000));
+            forceBuffers[atom1+PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.y*0x100000000));
+            forceBuffers[atom1+2*PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.z*0x100000000));
+        }
+
+
+    }
+
 
     /*
     // Second loop: tiles without exclusions, either from the neighbor list (with cutoff) or just enumerating all

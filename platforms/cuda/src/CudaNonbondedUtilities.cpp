@@ -390,15 +390,44 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 }
 
+#include <set>
+
 void CudaNonbondedUtilities::computeInteractions() {
     
     /*
+    vector<float4> posq1;
+    
+    context.getPosq().download(posq1);
+
+    set<int> interactionAtoms;
+
+    for(int i=0; i<32; i++) {
+        for(int j=0; j< posq1.size(); j++) {
+            float3 delta;
+            delta.x = posq1[j].x-posq1[i].x;
+            delta.y = posq1[j].y-posq1[i].y;
+            delta.z = posq1[j].z-posq1[i].z;
+            float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+            if(sqrt(r2) < cutoff) {
+                interactionAtoms.insert(j);
+            }
+        }
+    }
+
+
+    cout << "TRUTH INTERACTIONS" << endl;
+    for(set<int>::iterator it=interactionAtoms.begin(); it != interactionAtoms.end(); it++) {
+        cout << *it << endl;
+    }
+    /*
+
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);
         if (context.getComputeForceCount() == 1)
             updateNeighborListSize(); // This is the first time step, so check whether our initial guess was large enough.
     }
     */
+    
 }
 
 void CudaNonbondedUtilities::updateNeighborListSize() {

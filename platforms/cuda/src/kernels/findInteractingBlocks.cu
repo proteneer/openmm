@@ -231,6 +231,7 @@ extern "C" __global__ void findBlocksWithInteractions(
                                 0.5f*periodicBoxSize.y-blockSizeX.y >= PADDED_CUTOFF &&
                                 0.5f*periodicBoxSize.z-blockSizeX.z >= PADDED_CUTOFF);
 
+        // TODO: try shuffles again
         // initialize the pos buffer (could use shuffles later on for this if need be)
 
         if (threadIdx.x < TILE_SIZE) {
@@ -248,6 +249,8 @@ extern "C" __global__ void findBlocksWithInteractions(
 #endif
         }
         __syncthreads();
+
+        // to do sort in smem?
 
         // Compare block x to other blocks after this one in sorted order.
         for (int base = i+1; base < NUM_BLOCKS; base += blockDim.x) {
@@ -271,12 +274,9 @@ extern "C" __global__ void findBlocksWithInteractions(
 
             if (j < NUM_BLOCKS && delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED && !hasExclusions) {
                 // Add this tile to the buffer.
-
                 const int bufferIndex = valuesInBuffer*GROUP_SIZE+threadIdx.x;
                 buffer[bufferIndex] = y;
                 valuesInBuffer++;
-
-                
 
                 // cuda-memcheck --tool racecheck will throw errors about this as 
                 // RAW/WAW/WAR race condition errors. But this is safe in all instances
@@ -349,18 +349,15 @@ extern "C" __global__ void findBlocksWithInteractions(
                         sum[k*WARP_SIZE+indexInWarp] = (ixnBits ? 1 : 0);
                         interactionBitsBuffer[k*WARP_SIZE+indexInWarp] = ixnBits;
                     }
-
                     // Is this necessary? Why not just initialize sum to start with 0s
                     for (int k = numValid-base2+threadIdx.x/WARP_SIZE; k < BUFFER_SIZE/WARP_SIZE; k += GROUP_SIZE/WARP_SIZE)
                         sum[k*WARP_SIZE+indexInWarp] = 0;
 
                     // Compact the list of atoms and interactionBits
-
                     __syncthreads();
                     prefixSum(sum, temp);
 
                     // Store the list of atoms and interactionBits to global memory.
-
                     const unsigned int atomsToStore = sum[BUFFER_SIZE-1];
                     const unsigned int offset = numAtoms;
                     __syncthreads();
@@ -374,7 +371,6 @@ extern "C" __global__ void findBlocksWithInteractions(
                             }
                         }
                     }
-                    
                     if(threadIdx.x == 0)
                         numAtoms += atomsToStore;
 
@@ -392,11 +388,11 @@ extern "C" __global__ void findBlocksWithInteractions(
                 __syncthreads();
             } // buffer full for block x
 
-        } // finished processing this block
+        } // finished processing every block against block x
         if(threadIdx.x == 0)
             interactionsPerBlock[x] = numAtoms;
         __syncthreads();
-    } // finished all atomblocks
+    } // finished all atomblocks this threadblock is responsible for
     
     // Record the positions the neighbor list is based on.
     
