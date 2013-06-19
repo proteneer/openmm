@@ -210,7 +210,7 @@ extern "C" __global__ void findBlocksWithInteractions(
         buffer[i*GROUP_SIZE+threadIdx.x] = INVALID;
     __syncthreads();
     
-    // Loop over blocks sorted by size.
+    // Loop over all blocks sorted by size.
     for (int i = startBlockIndex+blockIdx.x; i < startBlockIndex+numBlocks; i += gridDim.x) {
         if (threadIdx.x == blockDim.x-1)
             numAtoms = 0;
@@ -272,9 +272,11 @@ extern "C" __global__ void findBlocksWithInteractions(
             if (j < NUM_BLOCKS && delta.x*delta.x+delta.y*delta.y+delta.z*delta.z < PADDED_CUTOFF_SQUARED && !hasExclusions) {
                 // Add this tile to the buffer.
 
-                int bufferIndex = valuesInBuffer*GROUP_SIZE+threadIdx.x;
+                const int bufferIndex = valuesInBuffer*GROUP_SIZE+threadIdx.x;
                 buffer[bufferIndex] = y;
                 valuesInBuffer++;
+
+                
 
                 // cuda-memcheck --tool racecheck will throw errors about this as 
                 // RAW/WAW/WAR race condition errors. But this is safe in all instances
@@ -283,10 +285,13 @@ extern "C" __global__ void findBlocksWithInteractions(
             }
             __syncthreads();
 
-            // if the buffer is full, we store data for these tiles
+            // this is known at compile time!
+            //const int lastGroup = (GROUP_SIZE < NUM_BLOCKS) ? NUM_BLOCKS - GROUP_SIZE : 0;
 
-            if (bufferFull) {
-                // The buffer is full, so we need to compact it and write out results.  Start by doing a parallel prefix sum.
+            // If the buffer is full, or if we are in the threadblock responsible for processing the last set of atomblocks,
+            // we compact the buffer to write out a more fine grained neighbor list, note that NUM_BLOCKS - GROUP_SIZE
+            // may be negative but that's ok. 
+            if (bufferFull || base >= NUM_BLOCKS - GROUP_SIZE) {
 
                 for (int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x) {
                     sum[k] = (buffer[k] == INVALID ? 0 : 1);
@@ -380,7 +385,6 @@ extern "C" __global__ void findBlocksWithInteractions(
 
                 for (int k = threadIdx.x; k < BUFFER_SIZE; k += blockDim.x)
                     buffer[k] = INVALID;
-
                 valuesInBuffer = 0;
                 if(threadIdx.x == 0)
                     bufferFull = false;

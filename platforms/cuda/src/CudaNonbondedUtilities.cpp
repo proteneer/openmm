@@ -367,7 +367,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 
-    /*
+    
     vector<unsigned int>hInteractionsPerBlock;
     interactionsPerBlock->download(hInteractionsPerBlock);
 
@@ -384,7 +384,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
         }
         cout << endl;
     }
-    */
+    
 
     
 
