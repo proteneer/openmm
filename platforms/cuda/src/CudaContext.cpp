@@ -405,7 +405,7 @@ CUmodule CudaContext::createModule(const string source, const map<string, string
 #ifdef _DEBUG
     string command = "\""+compiler+"\" --ptx -G -g --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
 #else
-    string command = "\""+compiler+"\" --ptx -G -lineinfo --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
+    string command = "\""+compiler+"\" --ptx -lineinfo --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
 #endif
     int res = compileInWindows(command);
 #else

@@ -394,7 +394,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 void CudaNonbondedUtilities::computeInteractions() {
     
-    
+    /*
     vector<float4> posq1;
     
     context.getPosq().download(posq1);
@@ -422,8 +422,9 @@ void CudaNonbondedUtilities::computeInteractions() {
     for(set<int>::iterator it=interactionAtoms.begin(); it != interactionAtoms.end(); it++) {
         cout << *it << endl;
     }
+    */
     
-
+    
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);
         if (context.getComputeForceCount() == 1)

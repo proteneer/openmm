@@ -371,6 +371,7 @@ extern "C" __global__ void findBlocksWithInteractions(
                             }
                         }
                     }
+
                     if(threadIdx.x == 0)
                         numAtoms += atomsToStore;
 

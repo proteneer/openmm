@@ -367,13 +367,15 @@ extern "C" __global__ void computeNonbonded(
         sharedForces1[threadIdx.x].z = 0.0f;
         __syncthreads();
         const unsigned int ixnsAllocated = interactionsAllocatedPerBlock;
-        const unsigned int numIxns = interactionsPerBlock[blockIdx.x];
+        const unsigned int numIxns = interactionsPerBlock[pos];
 
         for(unsigned int k = threadIdx.x; k < numIxns; k += blockDim.x) {
             const unsigned int atom2 = interactions[x*ixnsAllocated+k];
 
             unsigned int ixnBits = interactionBits[x*ixnsAllocated+k];
             const real2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
+
+
             real4 posq2 = posq[atom2];
 #ifdef USE_PERIODIC
             if(singlePeriodicCopy) {
