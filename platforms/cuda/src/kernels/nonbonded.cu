@@ -367,14 +367,13 @@ extern "C" __global__ void computeNonbonded(
         sharedForces1[threadIdx.x].z = 0.0f;
         __syncthreads();
         const unsigned int ixnsAllocated = interactionsAllocatedPerBlock;
-        const unsigned int numIxns = interactionsPerBlock[pos];
+        const unsigned int numIxns = interactionsPerBlock[x];
 
         for(unsigned int k = threadIdx.x; k < numIxns; k += blockDim.x) {
             const unsigned int atom2 = interactions[x*ixnsAllocated+k];
 
             unsigned int ixnBits = interactionBits[x*ixnsAllocated+k];
             const real2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
-
 
             real4 posq2 = posq[atom2];
 #ifdef USE_PERIODIC
@@ -469,9 +468,15 @@ extern "C" __global__ void computeNonbonded(
             force1.x = sharedForces1[threadIdx.x].x + sharedForces1[threadIdx.x+32].x;
             force1.y = sharedForces1[threadIdx.x].y + sharedForces1[threadIdx.x+32].y;
             force1.z = sharedForces1[threadIdx.x].z + sharedForces1[threadIdx.x+32].z;
-            forceBuffers[atom1] += static_cast<unsigned long long>((long long) (force1.x*0x100000000));
-            forceBuffers[atom1+PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.y*0x100000000));
-            forceBuffers[atom1+2*PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.z*0x100000000));
+            
+            // exclusion tiles are also writing to all of this.
+            atomicAdd(&forceBuffers[atom1], static_cast<unsigned long long>((long long) (force1.x*0x100000000)));
+            atomicAdd(&forceBuffers[atom1+PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force1.y*0x100000000)));
+            atomicAdd(&forceBuffers[atom1+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force1.z*0x100000000)));
+            
+            //forceBuffers[atom1] += static_cast<unsigned long long>((long long) (force1.x*0x100000000));
+            //forceBuffers[atom1+PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.y*0x100000000));
+            //forceBuffers[atom1+2*PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.z*0x100000000));
         }
 
 
