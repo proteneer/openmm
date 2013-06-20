@@ -332,7 +332,7 @@ extern "C" __global__ void computeNonbonded(
     __shared__ float2 sharedSigmaEpsilon1[TILE_SIZE];
 
     // forces are accumulated in every warp
-    __shared__ real3  sharedForces1[THREAD_BLOCK_SIZE];
+    __shared__ real3 volatile sharedForces1[THREAD_BLOCK_SIZE];
 
     const bool hasExclusions = false;
 
@@ -371,11 +371,7 @@ extern "C" __global__ void computeNonbonded(
 
         for(unsigned int k = threadIdx.x; k < numIxns; k += blockDim.x) {
             const unsigned int atom2 = interactions[x*ixnsAllocated+k];
-            
-            if(x == 0) {
-                printf("atom2: %d, tid: %d\n", atom2, threadIdx.x);
-            }
-            
+
             unsigned int ixnBits = interactionBits[x*ixnsAllocated+k];
             const real2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
             real4 posq2 = posq[atom2];
@@ -405,16 +401,7 @@ extern "C" __global__ void computeNonbonded(
 #endif
                 const real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
 
-                if(x == 0 && atom1 == 0 && atom2 == 603) {
-                    printf(" DISTANCE BTWN 0 and 603: %f, %f\n", r2, CUTOFF_SQUARED);
-                }
-
                 if(r2 < CUTOFF_SQUARED) {
-
-                    if(x == 0) {
-                        printf("testing interaction found between %d and %d\n", atom1, atom2);  
-                    }
-
                     const real invR = RSQRT(r2);
                     const real r = RECIP(invR);
                     const real2 sigmaEpsilon1 = sharedSigmaEpsilon1[tj];
@@ -457,16 +444,7 @@ extern "C" __global__ void computeNonbonded(
                 atomicAdd(&forceBuffers[atom2+2*PADDED_NUM_ATOMS], static_cast<unsigned long long>((long long) (force2.z*0x100000000)));
             }
         } 
-
         
-        if(threadIdx.x == 0 && x == 0) {
-            for(int i=0; i < 32; i++) {
-                printf("[%5.2f %5.2f %5.2f] ", sharedForces1[i].x, sharedForces1[i].y, sharedForces1[i].z);
-            }
-            printf("\n");
-        }
-        
-
         // reduce forces along atom1's dimension after all interacting atoms for block x has been processed
         __syncthreads();
         if(threadIdx.x < 128) {
@@ -485,10 +463,10 @@ extern "C" __global__ void computeNonbonded(
         __syncthreads();
         if(threadIdx.x < 32) {
             const unsigned int atom1 = x*TILE_SIZE+threadIdx.x;
-            real3 force1 = sharedForces1[threadIdx.x];
-            force1.x += sharedForces1[threadIdx.x+32].x;
-            force1.y += sharedForces1[threadIdx.x+32].y;
-            force1.z += sharedForces1[threadIdx.x+32].z;
+            real3 force1;
+            force1.x = sharedForces1[threadIdx.x].x + sharedForces1[threadIdx.x+32].x;
+            force1.y = sharedForces1[threadIdx.x].y + sharedForces1[threadIdx.x+32].y;
+            force1.z = sharedForces1[threadIdx.x].z + sharedForces1[threadIdx.x+32].z;
             forceBuffers[atom1] += static_cast<unsigned long long>((long long) (force1.x*0x100000000));
             forceBuffers[atom1+PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.y*0x100000000));
             forceBuffers[atom1+2*PADDED_NUM_ATOMS] += static_cast<unsigned long long>((long long) (force1.z*0x100000000));
