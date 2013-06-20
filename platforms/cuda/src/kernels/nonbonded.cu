@@ -334,9 +334,10 @@ extern "C" __global__ void computeNonbonded(
     // forces are accumulated in every warp
     __shared__ real3  sharedForces1[THREAD_BLOCK_SIZE];
 
+    const bool hasExclusions = false;
+
     // TODO: parallelize
     for(unsigned int pos = blockIdx.x; pos < NUM_BLOCKS; pos += gridDim.x) {
-        
         // TODO: Used to use shuffle, but it will use more resources and probably be slower
         // since each warp will need to load in the posqs and forces. But we're probably bottlenecked anyways
         // by memory at this point. 
@@ -370,9 +371,11 @@ extern "C" __global__ void computeNonbonded(
 
         for(unsigned int k = threadIdx.x; k < numIxns; k += blockDim.x) {
             const unsigned int atom2 = interactions[x*ixnsAllocated+k];
+            
             if(x == 0) {
                 printf("atom2: %d, tid: %d\n", atom2, threadIdx.x);
             }
+            
             unsigned int ixnBits = interactionBits[x*ixnsAllocated+k];
             const real2 sigmaEpsilon2 = global_sigmaEpsilon[atom2];
             real4 posq2 = posq[atom2];
@@ -392,7 +395,7 @@ extern "C" __global__ void computeNonbonded(
             for(unsigned int j = 0; j < TILE_SIZE; j++) {
                 const unsigned int atom1 = x*TILE_SIZE+tj;
                 const real4 posq1 = sharedPosq1[tj];
-                real3 delta = make_real3(posq2.x-posq1.x, posq2.x-posq1.y, posq2.z-posq1.z);
+                real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
 #ifdef USE_PERIODIC
                 if(!singlePeriodicCopy) {
                     delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
@@ -401,7 +404,17 @@ extern "C" __global__ void computeNonbonded(
                 }
 #endif
                 const real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+
+                if(x == 0 && atom1 == 0 && atom2 == 603) {
+                    printf(" DISTANCE BTWN 0 and 603: %f, %f\n", r2, CUTOFF_SQUARED);
+                }
+
                 if(r2 < CUTOFF_SQUARED) {
+
+                    if(x == 0) {
+                        printf("testing interaction found between %d and %d\n", atom1, atom2);  
+                    }
+
                     const real invR = RSQRT(r2);
                     const real r = RECIP(invR);
                     const real2 sigmaEpsilon1 = sharedSigmaEpsilon1[tj];
@@ -445,12 +458,14 @@ extern "C" __global__ void computeNonbonded(
             }
         } 
 
+        
         if(threadIdx.x == 0 && x == 0) {
             for(int i=0; i < 32; i++) {
                 printf("[%5.2f %5.2f %5.2f] ", sharedForces1[i].x, sharedForces1[i].y, sharedForces1[i].z);
             }
             printf("\n");
         }
+        
 
         // reduce forces along atom1's dimension after all interacting atoms for block x has been processed
         __syncthreads();

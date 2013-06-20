@@ -367,7 +367,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
     context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 
-    
+    /*
     vector<unsigned int>hInteractionsPerBlock;
     interactionsPerBlock->download(hInteractionsPerBlock);
 
@@ -385,7 +385,7 @@ void CudaNonbondedUtilities::prepareInteractions() {
         cout << endl;
     }
     
-
+    */
     
 
 }
@@ -394,12 +394,14 @@ void CudaNonbondedUtilities::prepareInteractions() {
 
 void CudaNonbondedUtilities::computeInteractions() {
     
-    /*
+    
     vector<float4> posq1;
     
     context.getPosq().download(posq1);
 
     set<int> interactionAtoms;
+
+    cout << "IXN COMPARE: "<< endl;
 
     for(int i=0; i<32; i++) {
         for(int j=0; j< posq1.size(); j++) {
@@ -409,6 +411,7 @@ void CudaNonbondedUtilities::computeInteractions() {
             delta.z = posq1[j].z-posq1[i].z;
             float r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
             if(sqrt(r2) < cutoff) {
+                cout << i << " " << j << endl;
                 interactionAtoms.insert(j);
             }
         }
@@ -419,14 +422,14 @@ void CudaNonbondedUtilities::computeInteractions() {
     for(set<int>::iterator it=interactionAtoms.begin(); it != interactionAtoms.end(); it++) {
         cout << *it << endl;
     }
-    /*
+    
 
     if (kernelSource.size() > 0) {
         context.executeKernel(forceKernel, &forceArgs[0], numForceThreadBlocks*forceThreadBlockSize, forceThreadBlockSize);
         if (context.getComputeForceCount() == 1)
             updateNeighborListSize(); // This is the first time step, so check whether our initial guess was large enough.
     }
-    */
+    
     
 }
 

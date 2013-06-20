@@ -268,7 +268,7 @@ extern "C" __global__ void findBlocksWithInteractions(
             delta.x = max(0.0f, fabs(delta.x)-blockSizeX.x-blockSizeY.x);
             delta.y = max(0.0f, fabs(delta.y)-blockSizeX.y-blockSizeY.y);
             delta.z = max(0.0f, fabs(delta.z)-blockSizeX.z-blockSizeY.z);
-            const bool hasExclusions = false;
+            bool hasExclusions = false;
             for (int k = 0; k < numExclusions; k++)
                 hasExclusions |= (exclusionsForX[k] == y);
 
