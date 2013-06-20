@@ -332,7 +332,7 @@ extern "C" __global__ void computeNonbonded(
     __shared__ float2 sharedSigmaEpsilon1[TILE_SIZE];
 
     // forces are accumulated in every warp
-    __shared__ real3 volatile sharedForces1[THREAD_BLOCK_SIZE];
+    __shared__ real3 sharedForces1[THREAD_BLOCK_SIZE];
 
     const bool hasExclusions = false;
 
