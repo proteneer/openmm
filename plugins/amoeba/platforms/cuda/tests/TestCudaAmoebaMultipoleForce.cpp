@@ -2872,11 +2872,13 @@ int main(int argc, char* argv[]) {
 
         // test direct polarization, no cutoff
 
-        testMultipoleAmmoniaDirectPolarization( log );
+        // testMultipoleAmmoniaDirectPolarization( log );
 
         // test mutual polarization, no cutoff
 
         testMultipoleAmmoniaMutualPolarization( log );
+
+        /*
 
         // test multipole direct & mutual polarization using PME
 
@@ -2902,6 +2904,8 @@ int main(int argc, char* argv[]) {
 
         // large box of water
         testPMEMutualPolarizationLargeWater( log );
+
+        */
 
     } catch(const std::exception& e) {
         std::cout << "exception: " << e.what() << std::endl;

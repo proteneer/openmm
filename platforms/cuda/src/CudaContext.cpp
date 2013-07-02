@@ -538,6 +538,7 @@ void CudaContext::executeKernel(CUfunction kernel, void** arguments, int threads
         str<<"Error invoking kernel: "<<getErrorString(result)<<" ("<<result<<")";
         throw OpenMMException(str.str());
     }
+    cuCtxSynchronize();
 }
 
 int CudaContext::computeThreadBlockSize(double memory, bool preferShared) const {

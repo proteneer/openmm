@@ -1353,6 +1353,17 @@ void CudaCalcAmoebaMultipoleForceKernel::initializeScaleFactors() {
     polarizationGroupFlags->upload(polarizationGroupFlagsVec);
 }
 
+
+void LLVectorToFloat3Vector(const vector<long long> & source, vector<float3> &dest) {
+    int vecSize = source.size()/3;
+    dest.resize(vecSize);
+    for(int i=0; i<vecSize; i++) {
+        dest[i].x = source[0*vecSize+i]/(float) 0x100000000;
+        dest[i].y = source[1*vecSize+i]/(float) 0x100000000;
+        dest[i].z = source[2*vecSize+i]/(float) 0x100000000;
+    }
+} 
+
 double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     if (!hasInitializedScaleFactors) {
         initializeScaleFactors();
@@ -1375,9 +1386,526 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
     int numForceThreadBlocks = nb.getNumForceThreadBlocks();
     int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
     void* npt = NULL;
+
+    // Conjugate Gradient Solver
+
+
+
+    // no PME
     if (pmeGrid == NULL) {
         // Compute induced dipoles.
         
+
+
+        /*
+        dampingAndThole = CudaArray::create<float2>(cu, paddedNumAtoms, "dampingAndThole");
+        polarizability = CudaArray::create<float>(cu, paddedNumAtoms, "polarizability");
+        multipoleParticles = CudaArray::create<int4>(cu, paddedNumAtoms, "multipoleParticles");
+        molecularDipoles = CudaArray::create<float>(cu, 3*paddedNumAtoms, "molecularDipoles");
+        molecularQuadrupoles = CudaArray::create<float>(cu, 5*paddedNumAtoms, "molecularQuadrupoles");
+        lastPositions = new CudaArray(cu, cu.getPosq().getSize(), cu.getPosq().getElementSize(), "lastPositions");
+        dampingAndThole->upload(dampingAndTholeVec);
+        polarizability->upload(polarizabilityVec);
+        multipoleParticles->upload(multipoleParticlesVec);
+        molecularDipoles->upload(molecularDipolesVec);
+        molecularQuadrupoles->upload(molecularQuadrupolesVec);
+        posq.upload(cu.getPinnedBuffer());
+
+        // Create workspace arrays.
+
+        int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
+        labFrameDipoles = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "labFrameDipoles");
+        labFrameQuadrupoles = new CudaArray(cu, 9*paddedNumAtoms, elementSize, "labFrameQuadrupoles");
+        field = new CudaArray(cu, 3*paddedNumAtoms, sizeof(long long), "field");
+        fieldPolar = new CudaArray(cu, 3*paddedNumAtoms, sizeof(long long), "fieldPolar");
+        torque = new CudaArray(cu, 3*paddedNumAtoms, sizeof(long long), "torque");
+        inducedDipole = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "inducedDipole");
+        inducedDipolePolar = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "inducedDipolePolar");
+        inducedDipoleErrors = new CudaArray(cu, cu.getNumThreadBlocks(), sizeof(float2), "inducedDipoleErrors");
+        cu.addAutoclearBuffer(*field);
+        cu.addAutoclearBuffer(*fieldPolar);
+        cu.addAutoclearBuffer(*torque);
+        */
+
+
+
+        // Compute initial values for dipole
+        // Set induced dipoles to polarizability times field
+        // Set tolerances
+        // Estimate initial set of dipoles with polynomial predictor
+        // Build neighborlist for computing preconditioner
+        // Compute preconditioner
+        // Allocate arrays for residual and M^-1 r
+
+
+        if (gkKernel == NULL) {
+
+            cout << "computing field due to permanent multipoles" << endl;
+
+            // compute field due to permanent multipoles
+            void* computeFixedFieldArgs[] = {&field->getDevicePointer(), &fieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
+                &covalentFlags->getDevicePointer(), &polarizationGroupFlags->getDevicePointer(), &nb.getExclusionTiles().getDevicePointer(), &startTileIndex, &numTileIndices,
+                &labFrameDipoles->getDevicePointer(), &labFrameQuadrupoles->getDevicePointer(), &dampingAndThole->getDevicePointer()};
+            cu.executeKernel(computeFixedFieldKernel, computeFixedFieldArgs, numForceThreadBlocks*fixedFieldThreads, fixedFieldThreads);
+            void* recordInducedDipolesArgs[] = {&field->getDevicePointer(), &fieldPolar->getDevicePointer(),
+                &inducedDipole->getDevicePointer(), &inducedDipolePolar->getDevicePointer(), &polarizability->getDevicePointer()};
+            cu.executeKernel(recordInducedDipolesKernel, recordInducedDipolesArgs, cu.getNumAtoms());
+        }
+
+
+        // via double loop (upper bound)
+        vector<float> minv(6*cu.getNumAtoms()*cu.getNumAtoms());
+        vector<float> polarity;
+        polarizability->download(polarity);
+        vector<float2> hDampAndThole;
+        dampingAndThole->download(hDampAndThole);
+        vector<float4> posq;
+        cu.getPosq().download(posq);
+
+        double4 periodicBoxSize = cu.getPeriodicBoxSize();
+        double4 invPeriodicBoxSize = cu.getInvPeriodicBoxSize();
+
+        // build pre-conditioner matrix m
+        const float off2 = 0.4*0.4;
+        int m = 0;
+
+
+        cout << "initializing the preconditioner" << endl;
+        // u0scale, u1scale, u2scale, u3scale all set to 1.
+        // pre-conditioner construction 
+        // the neighborlist will be an Nx6 floats size to accommodate for the tensors
+        for(int i=0; i<cu.getNumAtoms(); i++) {
+            //int ii = ipole[i];
+            float pdi = hDampAndThole[i].x;
+            float pti = hDampAndThole[i].y;
+            float poli = polarity[i];
+            // assume dscale==1 for all 11, 12, 13, and 14 interactions
+
+            for(int k=i+1; k<cu.getNumAtoms(); k++) {
+                float xr = posq[i].x-posq[k].x;
+                float yr = posq[i].y-posq[k].y;
+                float zr = posq[i].z-posq[k].z;
+
+                // compute periodic image here
+                if(pmeGrid != NULL) {
+                    xr -= floor(xr*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    yr -= floor(yr*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    zr -= floor(zr*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+                }
+                float r2 = xr*xr + yr*yr + zr*zr;
+                if(r2 < off2) {
+                    const float r = sqrt(r2);
+                    float scale3 = 1.0f;
+                    float scale5 = 1.0f;
+                    float damp = pdi*hDampAndThole[k].x;
+                    if(damp != 0) {
+                        const float pgamma = min(pti, hDampAndThole[k].y);
+                        damp = -pgamma*pow((r/damp),3);
+                        if(damp > -50.0) {
+                            const float expdamp = exp(damp);
+                            scale3 = scale3 * (1.0f-expdamp);
+                            scale5 = scale5 * (1.0f-expdamp*(1.0f-expdamp));
+                        }
+                    }
+                    const float polik = poli*polarity[k];
+                    const float rr3 = scale3*polik/(r*r2);
+                    const float rr5 = 3.0f*scale5*polik/(r*r2*r2);
+                    minv[m] = rr5*xr*xr-rr3;
+                    minv[m+1] = rr5*xr*yr;
+                    minv[m+2] = rr5*xr*zr;
+                    minv[m+3] = rr5*yr*yr-rr3;
+                    minv[m+4] = rr5*yr*zr;
+                    minv[m+5] = rr5*zr*zr-rr3;
+                    m+=6;
+                }
+
+            }
+        }
+
+        // set up conjugate gradient
+
+        cout << "setting up conjugate gradient" << endl;
+
+        // compute fixed electrostatic field and field polar due to permanent multipoles
+        void* computeFixedFieldArgs[] = {&field->getDevicePointer(), &fieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
+            &covalentFlags->getDevicePointer(), &polarizationGroupFlags->getDevicePointer(), &nb.getExclusionTiles().getDevicePointer(), &startTileIndex, &numTileIndices,
+            &labFrameDipoles->getDevicePointer(), &labFrameQuadrupoles->getDevicePointer(), &dampingAndThole->getDevicePointer()};
+        cu.executeKernel(computeFixedFieldKernel, computeFixedFieldArgs, numForceThreadBlocks*fixedFieldThreads, fixedFieldThreads);
+
+        vector<float3> hFixedField;
+        vector<float3> hFixedFieldp;
+        vector<long long> hFixedFieldLL;
+        vector<long long> hFixedFieldpLL;
+        field->download(hFixedFieldLL);
+        fieldPolar->download(hFixedFieldpLL);
+        LLVectorToFloat3Vector(hFixedFieldLL, hFixedField);
+        LLVectorToFloat3Vector(hFixedFieldpLL, hFixedFieldp);
+
+        // set induced dipoles to polarizability times direct field
+
+        vector<float3> udir(cu.getPaddedNumAtoms());
+        vector<float3> udirp(cu.getPaddedNumAtoms());
+        vector<float3> uind(udir);
+        vector<float3> uinp(udirp);
+
+        for(int i=0; i < cu.getNumAtoms(); i++) {
+            udir[i].x = polarity[i] * hFixedField[i].x;
+            udirp[i].x = polarity[i] * hFixedFieldp[i].x;
+            uind[i].x = udir[i].x;
+            uinp[i].x = udirp[i].x;
+    
+            udir[i].y = polarity[i] * hFixedField[i].y;
+            udirp[i].y = polarity[i] * hFixedFieldp[i].y;
+            uind[i].y = udir[i].y;
+            uinp[i].y = udirp[i].y;
+
+            udir[i].z = polarity[i] * hFixedField[i].z;
+            udirp[i].z = polarity[i] * hFixedFieldp[i].z;
+            uind[i].z = udir[i].z;
+            uinp[i].z = udirp[i].z;
+        }
+
+        // estimate induced dipoles from polynomial predictor
+
+        // set tolerances for computation of mutual induced dipoles
+
+        // set up temporary arrays used in conjugate gradient
+
+        vector<float3> rsd(cu.getNumAtoms());
+        vector<float3> rsdp(cu.getNumAtoms());
+        vector<float3> zrsd(cu.getNumAtoms());
+        vector<float3> zrsdp(cu.getNumAtoms());
+        vector<float3> conj(cu.getNumAtoms());
+        vector<float3> conjp(cu.getNumAtoms());
+        vector<float3> vec(cu.getNumAtoms());
+        vector<float3> vecp(cu.getNumAtoms());
+
+        cout << "a" << endl;
+        // get the dynamic electrostatic field due to induced dipoles
+
+        cu.clearBuffer(*inducedField);
+        cu.clearBuffer(*inducedFieldPolar);
+        if (gkKernel == NULL) {
+            void* computeInducedFieldArgs[] = {&inducedField->getDevicePointer(), &inducedFieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
+                &nb.getExclusionTiles().getDevicePointer(), &inducedDipole->getDevicePointer(), &inducedDipolePolar->getDevicePointer(), &startTileIndex, &numTileIndices,
+                &dampingAndThole->getDevicePointer()};
+            cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
+        }
+
+        cout << "b" << endl;
+
+        vector<float3> hInducedField;
+        vector<float3> hInducedFieldPolar;
+        vector<long long> hInducedFieldLL;
+        vector<long long> hInducedFieldPolarLL;
+
+        inducedField->download(hInducedFieldLL);
+        inducedFieldPolar->download(hInducedFieldPolarLL);
+        cout << "b.1" << endl;
+        LLVectorToFloat3Vector(hInducedFieldLL, hInducedField);
+        cout << "b.2" << endl;
+        LLVectorToFloat3Vector(hInducedFieldPolarLL, hInducedFieldPolar);
+
+        // set initial conjugate gradient residual and conjugate vector
+        cout << "c" << endl;
+
+        for(int i=0; i<rsd.size(); i++) {
+            if(polarity[i] != 0) {
+                rsd[i].x = (udir[i].x - uind[i].x)/polarity[i] + hInducedField[i].x;
+                rsdp[i].x = (udirp[i].x - uinp[i].x)/polarity[i] + hInducedFieldPolar[i].x;
+
+                rsd[i].y = (udir[i].y - uind[i].y)/polarity[i] + hInducedField[i].y;
+                rsdp[i].y = (udirp[i].y - uinp[i].y)/polarity[i] + hInducedFieldPolar[i].y;
+
+                rsd[i].z = (udir[i].z - uind[i].z)/polarity[i] + hInducedField[i].z;
+                rsdp[i].z = (udirp[i].z - uinp[i].z)/polarity[i] + hInducedFieldPolar[i].z;
+            }
+        }
+
+        cout << "d" << endl;
+        // apply pre-conditioner once
+
+        // use diagonal preconditioner elements as first approximation
+        const float udiag = 2.0f;
+        for(int i=0; i<cu.getNumAtoms(); i++) {
+            zrsd[i].x = udiag * polarity[i] * rsd[i].x;
+            zrsdp[i].x = udiag * polarity[i] * rsdp[i].x;
+            zrsd[i].y = udiag * polarity[i] * rsd[i].y;
+            zrsdp[i].y = udiag * polarity[i] * rsdp[i].y;
+            zrsd[i].z = udiag * polarity[i] * rsd[i].z;
+            zrsdp[i].z = udiag * polarity[i] * rsdp[i].z;
+        }
+        // apply off-diagonal pre-conditioner elements in second phase
+        // uscale0a
+        m = 0;
+        for(int i=0; i < cu.getNumAtoms(); i++) {
+            for(int k=i+1; k < cu.getNumAtoms(); k++) {
+                float xr = posq[i].x-posq[k].x;
+                float yr = posq[i].y-posq[k].y;
+                float zr = posq[i].z-posq[k].z;
+
+                // compute periodic image here
+                if(pmeGrid != NULL) {
+                    xr -= floor(xr*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                    yr -= floor(yr*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                    zr -= floor(zr*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+                }
+                float r2 = xr*xr + yr*yr + zr*zr;
+                if(r2 < off2) {
+                    float m0 = minv[m];
+                    float m1 = minv[m+1];
+                    float m2 = minv[m+2];
+                    float m3 = minv[m+3];
+                    float m4 = minv[m+4];
+                    float m5 = minv[m+5];
+                    m += 6;
+                    zrsd[i].x = zrsd[i].x+m0*rsd[k].x+m1*rsd[k].y+m2*rsd[k].z;
+                    zrsd[i].y = zrsd[i].y+m1*rsd[k].x+m3*rsd[k].y+m4*rsd[k].z;
+                    zrsd[i].z = zrsd[i].z+m2*rsd[k].x+m4*rsd[k].y+m5*rsd[k].z;
+                    zrsd[k].x = zrsd[k].x+m0*rsd[i].x+m1*rsd[i].y+m2*rsd[i].z;
+                    zrsd[k].y = zrsd[k].y+m1*rsd[i].x+m3*rsd[i].y+m4*rsd[i].z;
+                    zrsd[k].z = zrsd[k].z+m2*rsd[i].x+m4*rsd[i].y+m5*rsd[i].z;
+                    zrsdp[i].x = zrsdp[i].x+m0*rsdp[k].x+m1*rsdp[k].y+m2*rsdp[k].z;
+                    zrsdp[i].y = zrsdp[i].y+m1*rsdp[k].x+m3*rsdp[k].y+m4*rsdp[k].z;
+                    zrsdp[i].z = zrsdp[i].z+m2*rsdp[k].x+m4*rsdp[k].y+m5*rsdp[k].z;
+                    zrsdp[k].x = zrsdp[k].x+m0*rsdp[i].x+m1*rsdp[i].y+m2*rsdp[i].z;
+                    zrsdp[k].y = zrsdp[k].y+m1*rsdp[i].x+m3*rsdp[i].y+m4*rsdp[i].z;
+                    zrsdp[k].z = zrsdp[k].z+m2*rsdp[i].x+m4*rsdp[i].y+m5*rsdp[i].z;      
+                }
+            }
+        }
+
+        // set initial search directions
+
+        for(int i=0; i<cu.getNumAtoms(); i++) {
+            conj[i].x = zrsd[i].x;
+            conjp[i].x = zrsdp[i].x;
+            conj[i].y = zrsd[i].y;
+            conjp[i].y = zrsdp[i].y;
+            conj[i].z = zrsd[i].z;
+            conjp[i].z = zrsdp[i].z;
+        }
+
+        // conjugate gradient iteration of mutual induced dipoles
+        for (int i = 0; i < maxInducedIterations; i++) {
+            for(int j=0; j<cu.getNumAtoms(); j++) {
+                vec[j].x = uind[j].x;
+                vec[j].y = uind[j].y;
+                vec[j].z = uind[j].z;
+                uind[j].x = conj[j].x;
+                uind[j].y = conj[j].y;
+                uind[j].z = conj[j].z;
+                vecp[j].x = uinp[j].x;
+                vecp[j].y = uinp[j].y;
+                vecp[j].z = uinp[j].z;
+                uinp[j].x = conjp[j].x;
+                uinp[j].y = conjp[j].y;
+                uinp[j].z = conjp[j].z;
+            } 
+
+            // convert float3 uind to float * 
+
+            vector<float> uindfloatBuffer(cu.getPaddedNumAtoms()*3);
+            vector<float> uinpfloatBuffer(cu.getPaddedNumAtoms()*3);
+
+            for(int i=0; i<uind.size(); i++) {
+                uindfloatBuffer[3*i+0]=uind[i].x;
+                uindfloatBuffer[3*i+1]=uind[i].y;
+                uindfloatBuffer[3*i+2]=uind[i].z;
+                uinpfloatBuffer[3*i+0]=uinp[i].x;
+                uinpfloatBuffer[3*i+1]=uinp[i].y;
+                uinpfloatBuffer[3*i+2]=uinp[i].z;
+            }
+            
+            inducedDipole->upload(uindfloatBuffer);
+            inducedDipolePolar->upload(uinpfloatBuffer);
+
+            // compute a new induced field based on these dipoles
+
+            cu.clearBuffer(*inducedField);
+            cu.clearBuffer(*inducedFieldPolar);
+            if (gkKernel == NULL) {
+                void* computeInducedFieldArgs[] = {&inducedField->getDevicePointer(), &inducedFieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
+                    &nb.getExclusionTiles().getDevicePointer(), &inducedDipole->getDevicePointer(), &inducedDipolePolar->getDevicePointer(), &startTileIndex, &numTileIndices,
+                    &dampingAndThole->getDevicePointer()};
+                cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
+           } 
+
+
+            inducedField->download(hInducedFieldLL);
+            inducedFieldPolar->download(hInducedFieldPolarLL);
+            LLVectorToFloat3Vector(hInducedFieldLL, hInducedField);
+            LLVectorToFloat3Vector(hInducedFieldPolarLL, hInducedFieldPolar);
+
+            // update induced dipoles of each atom
+            cout << "updating induced dipoles of each atom" << endl;
+
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                if(polarity[i] != 0) {
+                    uind[i].x = vec[i].x;
+                    uinp[i].x = vecp[i].x;
+                    vec[i].x = conj[i].x/polarity[i] - hInducedField[i].x;
+                    vecp[i].x = conjp[i].x/polarity[i] - hInducedFieldPolar[i].x;
+
+                    uind[i].y = vec[i].y;
+                    uinp[i].y = vecp[i].y;
+                    vec[i].y = conj[i].y/polarity[i] - hInducedField[i].y;
+                    vecp[i].y = conjp[i].y/polarity[i] - hInducedFieldPolar[i].y;
+
+                    uind[i].z = vec[i].z;
+                    uinp[i].z = vecp[i].z;
+                    vec[i].z = conj[i].z/polarity[i] - hInducedField[i].z;
+                    vecp[i].z = conjp[i].z/polarity[i] - hInducedFieldPolar[i].z;
+                }
+            }
+
+            float a = 0.0f;
+            float ap = 0.0f;
+            float sum = 0.0f;
+            float sump = 0.0f;
+
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                a += conj[i].x*vec[i].x;
+                ap += conjp[i].x*vecp[i].x;
+                sum += rsd[i].x*zrsd[i].x;
+                sump += rsdp[i].x*zrsdp[i].x;
+
+                a += conj[i].y*vec[i].y;
+                ap += conjp[i].y*vecp[i].y;
+                sum += rsd[i].y*zrsd[i].y;
+                sump += rsdp[i].y*zrsdp[i].y;
+
+                a += conj[i].z*vec[i].z;
+                ap += conjp[i].z*vecp[i].z;
+                sum += rsd[i].z*zrsd[i].z;
+                sump += rsdp[i].z*zrsdp[i].z;
+            }
+
+            a = (a == 0.0f) ? a : sum / a;
+            ap = (ap == 0.0f) ? ap : sump / ap;
+
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                uind[i].x += a*conj[i].x;
+                uinp[i].x += ap*conjp[i].x;
+                rsd[i].x -= a*vec[i].x;
+                rsdp[i].x -= ap*vecp[i].x;
+
+                uind[i].y += a*conj[i].y;
+                uinp[i].y += ap*conjp[i].y;
+                rsd[i].y -= a*vec[i].y;
+                rsdp[i].y -= ap*vecp[i].y;
+
+                uind[i].z += a*conj[i].z;
+                uinp[i].z += ap*conjp[i].z;
+                rsd[i].z -= a*vec[i].z;
+                rsdp[i].z -= ap*vecp[i].z;
+            }
+
+            // apply preconditioner again
+            // use diagonal preconditioner elements as first approximation
+            // const float udiag = 2.0f;
+            for(int i=0; i<cu.getNumAtoms(); i++) {
+                zrsd[i].x = udiag * polarity[i] * rsd[i].x;
+                zrsdp[i].x = udiag * polarity[i] * rsdp[i].x;
+                zrsd[i].y = udiag * polarity[i] * rsd[i].y;
+                zrsdp[i].y = udiag * polarity[i] * rsdp[i].y;
+                zrsd[i].z = udiag * polarity[i] * rsd[i].z;
+                zrsdp[i].z = udiag * polarity[i] * rsdp[i].z;
+            }
+            // apply off-diagonal pre-conditioner elements in second phase
+            // uscale0a
+            m = 0;
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                for(int k=i+1; k < cu.getNumAtoms(); k++) {
+                    float xr = posq[i].x-posq[k].x;
+                    float yr = posq[i].y-posq[k].y;
+                    float zr = posq[i].z-posq[k].z;
+
+                    // compute periodic image here
+                    if(pmeGrid != NULL) {
+                        xr -= floor(xr*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                        yr -= floor(yr*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                        zr -= floor(zr*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+                    }
+                    float r2 = xr*xr + yr*yr + zr*zr;
+                    if(r2 < off2) {
+                        float m0 = minv[m];
+                        float m1 = minv[m+1];
+                        float m2 = minv[m+2];
+                        float m3 = minv[m+3];
+                        float m4 = minv[m+4];
+                        float m5 = minv[m+5];
+                        m += 6;
+                        zrsd[i].x = zrsd[i].x+m0*rsd[k].x+m1*rsd[k].y+m2*rsd[k].z;
+                        zrsd[i].y = zrsd[i].y+m1*rsd[k].x+m3*rsd[k].y+m4*rsd[k].z;
+                        zrsd[i].z = zrsd[i].z+m2*rsd[k].x+m4*rsd[k].y+m5*rsd[k].z;
+                        zrsd[k].x = zrsd[k].x+m0*rsd[i].x+m1*rsd[i].y+m2*rsd[i].z;
+                        zrsd[k].y = zrsd[k].y+m1*rsd[i].x+m3*rsd[i].y+m4*rsd[i].z;
+                        zrsd[k].z = zrsd[k].z+m2*rsd[i].x+m4*rsd[i].y+m5*rsd[i].z;
+                        zrsdp[i].x = zrsdp[i].x+m0*rsdp[k].x+m1*rsdp[k].y+m2*rsdp[k].z;
+                        zrsdp[i].y = zrsdp[i].y+m1*rsdp[k].x+m3*rsdp[k].y+m4*rsdp[k].z;
+                        zrsdp[i].z = zrsdp[i].z+m2*rsdp[k].x+m4*rsdp[k].y+m5*rsdp[k].z;
+                        zrsdp[k].x = zrsdp[k].x+m0*rsdp[i].x+m1*rsdp[i].y+m2*rsdp[i].z;
+                        zrsdp[k].y = zrsdp[k].y+m1*rsdp[i].x+m3*rsdp[i].y+m4*rsdp[i].z;
+                        zrsdp[k].z = zrsdp[k].z+m2*rsdp[i].x+m4*rsdp[i].y+m5*rsdp[i].z;      
+                    }
+                }
+            }
+
+            float b = 0.0f;
+            float bp = 0.0f;
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                b += rsd[i].x*zrsd[i].x;
+                bp += rsdp[i].x*zrsdp[i].x;
+                b += rsd[i].y*zrsd[i].y;
+                bp += rsdp[i].y*zrsdp[i].y;
+                b += rsd[i].z*zrsd[i].z;
+                bp += rsdp[i].z*zrsdp[i].z;
+            }
+
+            b = (b == 0.0f) ? b : b / sum;
+            bp = (bp == 0.0f) ? bp : bp / sum;
+
+            float epsd = 0.0f;
+            float epsp = 0.0f;
+
+            for(int i=0; i < cu.getNumAtoms(); i++) {
+                conj[i].x = zrsd[i].x + b*conj[i].x;
+                conjp[i].x = zrsdp[i].x + bp*conjp[i].x;
+                epsd += rsd[i].x*rsd[i].x;
+                epsp += rsdp[i].x*rsdp[i].x;
+
+                conj[i].y = zrsd[i].y + b*conj[i].y;
+                conjp[i].y = zrsdp[i].y + bp*conjp[i].y;
+                epsd += rsd[i].y*rsd[i].y;
+                epsp += rsdp[i].y*rsdp[i].y;
+
+                conj[i].z = zrsd[i].z + b*conj[i].z;
+                conjp[i].z = zrsdp[i].z + bp*conjp[i].z;
+                epsd += rsd[i].z*rsd[i].z;
+                epsp += rsdp[i].z*rsdp[i].z;
+            }
+
+            if (48.033324*sqrt(max(epsd, epsp)/cu.getNumAtoms()) < inducedEpsilon)
+                break;
+        }
+
+        vector<float> uindfloatBuffer(cu.getPaddedNumAtoms()*3);
+        vector<float> uinpfloatBuffer(cu.getPaddedNumAtoms()*3);
+
+        for(int i=0; i<uind.size(); i++) {
+            uindfloatBuffer[3*i+0]=uind[i].x;
+            uindfloatBuffer[3*i+1]=uind[i].y;
+            uindfloatBuffer[3*i+2]=uind[i].z;
+            uinpfloatBuffer[3*i+0]=uinp[i].x;
+            uinpfloatBuffer[3*i+1]=uinp[i].y;
+            uinpfloatBuffer[3*i+2]=uinp[i].z;
+        }
+
+        inducedDipole->upload(uindfloatBuffer);
+        inducedDipolePolar->upload(uinpfloatBuffer);
+
+        /*
         if (gkKernel == NULL) {
             void* computeFixedFieldArgs[] = {&field->getDevicePointer(), &fieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
                 &covalentFlags->getDevicePointer(), &polarizationGroupFlags->getDevicePointer(), &nb.getExclusionTiles().getDevicePointer(), &startTileIndex, &numTileIndices,
@@ -1441,7 +1969,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             if (48.033324*sqrt(max(total1, total2)/cu.getNumAtoms()) < inducedEpsilon)
                 break;
         }
-        
+        */
         // Compute electrostatic force.
         
         void* electrostaticsArgs[] = {&cu.getForce().getDevicePointer(), &torque->getDevicePointer(), &cu.getEnergyBuffer().getDevicePointer(),
