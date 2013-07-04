@@ -1748,7 +1748,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         cout << "starting conjugate gradient." << endl;
         cout << "maxIterations: " << maxInducedIterations << endl;
 
-        for (int iteration = 0; iteration < 0; iteration++) {
+        for (int iteration = 0; iteration < 1; iteration++) {
 
             for(int j=0; j<cu.getNumAtoms(); j++) {
                 vec[j].x = uind[j].x;

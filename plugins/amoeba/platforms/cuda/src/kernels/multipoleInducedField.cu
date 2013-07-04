@@ -258,6 +258,11 @@ extern "C" __global__ void computeInducedField(
             localData[threadIdx.x].inducedDipolePolarS = data.inducedDipolePolarS;
             localData[threadIdx.x].bornRadius = data.bornRadius;
 #endif
+            /*
+        }
+            __syncthreads();
+        if(x == y) {
+            */
             for (unsigned int j = 0; j < TILE_SIZE; j++) {
                 real3 delta = localData[tbx+j].pos-data.pos;
 #ifdef USE_PERIODIC
@@ -277,6 +282,9 @@ extern "C" __global__ void computeInducedField(
                 }
 
             }
+
+
+
         }
         else {
             // This is an off-diagonal tile.
