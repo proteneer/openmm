@@ -238,13 +238,12 @@ extern "C" __global__ void computeInducedField(
                         atom1, atom2, data.field, data.inducedDipole, data.thole, data.damp, 
                         localData[tbx+j].field, localData[tbx+j].inducedDipole, localData[tbx+j].thole, localData[tbx+j].damp);
                         */
-        /*
+        
         if(atom1 < NUM_ATOMS) {
             printf("atom1 %d, ind %f %f %f, thole %f, damp %f\n", 
                         atom1, data.inducedDipole.x, data.inducedDipole.y, data.inducedDipole.z, data.thole, data.damp);
         }
-        */
-
+        
         if (x == y) {
             // This tile is on the diagonal.
 

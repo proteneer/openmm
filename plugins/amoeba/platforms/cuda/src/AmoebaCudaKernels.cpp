@@ -1636,7 +1636,20 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
 
 
+        vector<float> uindfloatBuffer1(cu.getPaddedNumAtoms()*3);
+        vector<float> uinpfloatBuffer1(cu.getPaddedNumAtoms()*3);
 
+        for(int i=0; i<uind.size(); i++) {
+            uindfloatBuffer1[3*i+0]=uind[i].x;
+            uindfloatBuffer1[3*i+1]=uind[i].y;
+            uindfloatBuffer1[3*i+2]=uind[i].z;
+            uinpfloatBuffer1[3*i+0]=uinp[i].x;
+            uinpfloatBuffer1[3*i+1]=uinp[i].y;
+            uinpfloatBuffer1[3*i+2]=uinp[i].z;
+        }
+
+        inducedDipole->upload(uindfloatBuffer1);
+        inducedDipolePolar->upload(uinpfloatBuffer1);
 
 
 
