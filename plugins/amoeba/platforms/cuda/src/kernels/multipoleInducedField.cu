@@ -191,6 +191,10 @@ __device__ void computeOneInteraction(AtomData& atom1, AtomData& atom2, real3 de
     atom2.field += rr3*atom1.inducedDipole + dDotDelta*deltaR;
     dDotDelta = rr5*dot(deltaR, atom1.inducedDipolePolar);
     atom2.fieldPolar += rr3*atom1.inducedDipolePolar + dDotDelta*deltaR;
+
+
+
+
 }
 #endif
 
@@ -229,6 +233,18 @@ extern "C" __global__ void computeInducedField(
 #else
         loadAtomData(data, atom1, posq, inducedDipole, inducedDipolePolar, dampingAndThole);
 #endif
+        /*
+                    printf("atom1 %d, atom2 %d, atom1 field %f, inducedDipole %f, thole %f, damp %f, atom2 field %f, inducedDipole %f, thole %f, damp %f\n", 
+                        atom1, atom2, data.field, data.inducedDipole, data.thole, data.damp, 
+                        localData[tbx+j].field, localData[tbx+j].inducedDipole, localData[tbx+j].thole, localData[tbx+j].damp);
+                        */
+        /*
+        if(atom1 < NUM_ATOMS) {
+            printf("atom1 %d, ind %f %f %f, thole %f, damp %f\n", 
+                        atom1, data.inducedDipole.x, data.inducedDipole.y, data.inducedDipole.z, data.thole, data.damp);
+        }
+        */
+
         if (x == y) {
             // This tile is on the diagonal.
 
@@ -250,8 +266,16 @@ extern "C" __global__ void computeInducedField(
                 delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
 #endif
                 int atom2 = y*TILE_SIZE+j;
-                if (atom1 < NUM_ATOMS && atom2 < NUM_ATOMS)
+                if (atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
                     computeOneInteraction(data, localData[tbx+j], delta, atom1 == atom2);
+                    
+                        printf("atom1 %d, field %f %f %f, ind %f %f %f, thole %f, damp %f\n atom2 %d, field %f %f %f, ind %f %f %f, thole %f,damp %f \n", 
+                        atom1, data.field.x, data.field.y, data.field.z, data.inducedDipole.x, data.inducedDipole.y, data.inducedDipole.z, data.thole, data.damp,
+                        atom2, localData[tbx+j].field.x, localData[tbx+j].field.y, localData[tbx+j].field.z, localData[tbx+j].inducedDipole.x, localData[tbx+j].inducedDipole.y, localData[tbx+j].inducedDipole.z, localData[tbx+j].thole, localData[tbx+j].damp);
+                        
+
+                }
+
             }
         }
         else {

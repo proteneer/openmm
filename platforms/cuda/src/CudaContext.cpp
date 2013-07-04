@@ -397,7 +397,7 @@ CUmodule CudaContext::createModule(const string source, const map<string, string
     // Write out the source to a temporary file.
     
     stringstream tempFileName;
-    tempFileName << "openmmTempKernel" << this; // Include a pointer to this context as part of the filename to avoid collisions.
+    tempFileName << "openmmTempKernel" << rand() << this; // Include a pointer to this context as part of the filename to avoid collisions.
     string inputFile = (tempDir+tempFileName.str()+".cu");
     string outputFile = (tempDir+tempFileName.str()+".ptx");
     string logFile = (tempDir+tempFileName.str()+".log");
@@ -409,7 +409,7 @@ CUmodule CudaContext::createModule(const string source, const map<string, string
 #ifdef _DEBUG
     string command = "\""+compiler+"\" --ptx -G -g --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
 #else
-    string command = "\""+compiler+"\" --ptx -lineinfo --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
+    string command = "\""+compiler+"\" --ptx -G -lineinfo --machine "+bits+" -arch=sm_"+gpuArchitecture+" -o "+outputFile+" "+options+" "+inputFile+" 2> "+logFile;
 #endif
     int res = compileInWindows(command);
 #else
@@ -440,15 +440,15 @@ CUmodule CudaContext::createModule(const string source, const map<string, string
             m<<"Error loading CUDA module: "<<getErrorString(result)<<" ("<<result<<")";
             throw OpenMMException(m.str());
         }
-        remove(inputFile.c_str());
-        remove(outputFile.c_str());
-        remove(logFile.c_str());
+        //remove(inputFile.c_str());
+        //remove(outputFile.c_str());
+        //remove(logFile.c_str());
         return module;
     }
     catch (...) {
-        remove(inputFile.c_str());
-        remove(outputFile.c_str());
-        remove(logFile.c_str());
+        //remove(inputFile.c_str());
+        //remove(outputFile.c_str());
+        //remove(logFile.c_str());
         throw;
     }
 }
@@ -556,6 +556,7 @@ int CudaContext::computeThreadBlockSize(double memory, bool preferShared) const 
 
 void CudaContext::clearBuffer(CudaArray& array) {
     clearBuffer(array.getDevicePointer(), array.getSize()*array.getElementSize());
+    cuCtxSynchronize();
 }
 
 void CudaContext::clearBuffer(CUdeviceptr memory, int size) {

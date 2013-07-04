@@ -1437,7 +1437,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         // Compute preconditioner
         // Allocate arrays for residual and M^-1 r
 
-
+        /*
         if (gkKernel == NULL) {
 
             cout << "computing field due to permanent multipoles" << endl;
@@ -1451,6 +1451,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                 &inducedDipole->getDevicePointer(), &inducedDipolePolar->getDevicePointer(), &polarizability->getDevicePointer()};
             cu.executeKernel(recordInducedDipolesKernel, recordInducedDipolesArgs, cu.getNumAtoms());
         }
+        */
 
 
         // via double loop (upper bound)
@@ -1527,6 +1528,9 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         cout << "setting up conjugate gradient" << endl;
 
         // compute fixed electrostatic field and field polar due to permanent multipoles
+
+        cu.clearBuffer(*field);
+        cu.clearBuffer(*fieldPolar);
         void* computeFixedFieldArgs[] = {&field->getDevicePointer(), &fieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
             &covalentFlags->getDevicePointer(), &polarizationGroupFlags->getDevicePointer(), &nb.getExclusionTiles().getDevicePointer(), &startTileIndex, &numTileIndices,
             &labFrameDipoles->getDevicePointer(), &labFrameQuadrupoles->getDevicePointer(), &dampingAndThole->getDevicePointer()};
@@ -1540,6 +1544,11 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         fieldPolar->download(hFixedFieldpLL);
         LLVectorToFloat3Vector(hFixedFieldLL, hFixedField);
         LLVectorToFloat3Vector(hFixedFieldpLL, hFixedFieldp);
+
+        cout << "fixed field vectors" << endl;
+        for(int j=0; j<cu.getNumAtoms(); j++) {
+            cout << hFixedField[j].x << " " << hFixedField[j].y << " " << hFixedField[j].z << endl;
+        }
 
         // set induced dipoles to polarizability times direct field
 
@@ -1571,17 +1580,65 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
         // set up temporary arrays used in conjugate gradient
 
-        vector<float3> rsd(cu.getNumAtoms());
-        vector<float3> rsdp(cu.getNumAtoms());
-        vector<float3> zrsd(cu.getNumAtoms());
-        vector<float3> zrsdp(cu.getNumAtoms());
-        vector<float3> conj(cu.getNumAtoms());
-        vector<float3> conjp(cu.getNumAtoms());
-        vector<float3> vec(cu.getNumAtoms());
-        vector<float3> vecp(cu.getNumAtoms());
+        float3 if3 = make_float3(0,0,0);
+
+        vector<float3> rsd(cu.getPaddedNumAtoms(), if3);
+        vector<float3> rsdp(cu.getPaddedNumAtoms(), if3);
+        vector<float3> zrsd(cu.getPaddedNumAtoms(), if3);
+        vector<float3> zrsdp(cu.getPaddedNumAtoms(), if3);
+        vector<float3> conj(cu.getPaddedNumAtoms(), if3);
+        vector<float3> conjp(cu.getPaddedNumAtoms(), if3);
+        vector<float3> vec(cu.getPaddedNumAtoms(), if3);
+        vector<float3> vecp(cu.getPaddedNumAtoms(), if3);
 
         cout << "a" << endl;
         // get the dynamic electrostatic field due to induced dipoles
+
+
+
+
+        cout << "induced dipoles" << endl;
+        for(int i=0; i<cu.getNumAtoms(); i++) {
+            cout << uind[i].x << " " << uind[i].y << " " << uind[i].z << " " << endl;
+        }
+
+        cout << "induced dipoles polar" << endl;
+        for(int i=0; i<cu.getNumAtoms(); i++) {
+            cout << uinp[i].x << " " << uinp[i].y << " " << uinp[i].z << " " << endl;
+        }
+
+        vector<ushort2> exclusionTiles;
+        nb.getExclusionTiles().download(exclusionTiles);
+
+        cout << "exclusion tiles:" << endl;
+        for(int i=0; i<exclusionTiles.size(); i++) {
+            cout << exclusionTiles[i].x << " " << exclusionTiles[i].y << endl;
+        }
+
+        cout << "damping and thole:" << endl;
+
+        vector<float2> hDampAndTholeHost;
+        dampingAndThole->download(hDampAndTholeHost);
+        for(int i=0; i < cu.getNumAtoms(); i++) {
+            cout << hDampAndTholeHost[i].x << " " << hDampAndTholeHost[i].y << endl;
+        }
+
+        cout << "posq:" << endl;
+
+        vector<float4> hPosq;
+        cu.getPosq().download(hPosq);
+        for(int i=0; i < cu.getNumAtoms(); i++) {
+            cout << hPosq[i].x << " " << hPosq[i].y << " " << hPosq[i].z << " " << hPosq[i].w << endl;
+        }
+
+        cout << "start tile index, numTileIndices" << endl;
+        cout << startTileIndex << " " << numTileIndices << endl;
+
+
+
+
+
+
 
         cu.clearBuffer(*inducedField);
         cu.clearBuffer(*inducedFieldPolar);
@@ -1691,12 +1748,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         cout << "starting conjugate gradient." << endl;
         cout << "maxIterations: " << maxInducedIterations << endl;
 
-        for (int iteration = 0; iteration < 300000; iteration++) {
-
-            cout << "iteration: " << iteration << " ";
-            for(int i=0; i<cu.getNumAtoms(); i++) {
-                cout << uind[i].x << " " << uind[i].y << " " << uind[i].z << " " << endl;
-            }
+        for (int iteration = 0; iteration < 0; iteration++) {
 
             for(int j=0; j<cu.getNumAtoms(); j++) {
                 vec[j].x = uind[j].x;
@@ -1712,6 +1764,47 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                 uinp[j].y = conjp[j].y;
                 uinp[j].z = conjp[j].z;
             } 
+
+            if(iteration == 0) {
+
+                cout << "iteration: " << iteration << " " << endl;
+                cout << "induced dipoles" << endl;
+                for(int i=0; i<cu.getNumAtoms(); i++) {
+                    cout << uind[i].x << " " << uind[i].y << " " << uind[i].z << " " << endl;
+                }
+
+                cout << "induced dipoles polar" << endl;
+                for(int i=0; i<cu.getNumAtoms(); i++) {
+                    cout << uinp[i].x << " " << uinp[i].y << " " << uinp[i].z << " " << endl;
+                }
+
+                vector<ushort2> exclusionTiles;
+                nb.getExclusionTiles().download(exclusionTiles);
+
+                cout << "exclusion tiles:" << endl;
+                for(int i=0; i<exclusionTiles.size(); i++) {
+                    cout << exclusionTiles[i].x << " " << exclusionTiles[i].y << endl;
+                }
+
+                cout << "damping and thole:" << endl;
+
+                vector<float2> hDampAndTholeHost;
+                dampingAndThole->download(hDampAndTholeHost);
+                for(int i=0; i < cu.getNumAtoms(); i++) {
+                    cout << hDampAndTholeHost[i].x << " " << hDampAndTholeHost[i].y << endl;
+                }
+
+                cout << "posq:" << endl;
+
+                vector<float4> hPosq;
+                cu.getPosq().download(hPosq);
+                for(int i=0; i < cu.getNumAtoms(); i++) {
+                    cout << hPosq[i].x << " " << hPosq[i].y << " " << hPosq[i].z << " " << hPosq[i].w << endl;
+                }
+
+                cout << "start tile index, numTileIndices" << endl;
+                cout << startTileIndex << " " << numTileIndices << endl;
+            }
 
             // convert float3 uind to float * 
 
@@ -1735,34 +1828,28 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             cu.clearBuffer(*inducedField);
             cu.clearBuffer(*inducedFieldPolar);
 
+
+
+
             if (gkKernel == NULL) {
                 void* computeInducedFieldArgs[] = {&inducedField->getDevicePointer(), &inducedFieldPolar->getDevicePointer(), &cu.getPosq().getDevicePointer(),
                     &nb.getExclusionTiles().getDevicePointer(), &inducedDipole->getDevicePointer(), &inducedDipolePolar->getDevicePointer(), &startTileIndex, &numTileIndices,
                     &dampingAndThole->getDevicePointer()};
                 cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
             } 
-
-
+            
             inducedField->download(hInducedFieldLL);
             inducedFieldPolar->download(hInducedFieldPolarLL);
 
             LLVectorToFloat3Vector(hInducedFieldLL, hInducedField);
             LLVectorToFloat3Vector(hInducedFieldPolarLL, hInducedFieldPolar);
-
-            // combine inducedField with fixed field
-            /*
-            for(int i=0; i < hInducedField.size(); i++) {
-                hInducedField[i].x += hFixedField[i].x;
-                hInducedField[i].y += hFixedField[i].y;
-                hInducedField[i].z += hFixedField[i].z;
+            if(iteration == 0) {
+           
+                cout << "induced field: " << endl;
+                for(int i=0; i<cu.getNumAtoms(); i++) {
+                    cout << hInducedField[i].x << " " << hInducedField[i].y << " " << hInducedField[i].z << " " << endl;
+                }
             }
-            for(int i=0; i < hInducedFieldPolar.size(); i++) {
-                hInducedFieldPolar[i].x += hFixedFieldp[i].x;
-                hInducedFieldPolar[i].y += hFixedFieldp[i].y;
-                hInducedFieldPolar[i].z += hFixedFieldp[i].z;
-            }
-            */
-
             for(int i=0; i < cu.getNumAtoms(); i++) {
                 if(polarity[i] != 0) {
                     uind[i].x = vec[i].x;
@@ -1909,8 +1996,14 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                 epsp += rsdp[i].z*rsdp[i].z;
             }
 
-            cout << epsd << " " << epsp << endl;
 
+
+
+
+
+
+
+                        
             if (48.033324*sqrt(max(epsd, epsp)/cu.getNumAtoms()) < inducedEpsilon)
                 break;
         }
