@@ -1,5 +1,5 @@
 
-/* Portions copyright (c) 2010 Stanford University and Simbios.
+/* Portions copyright (c) 2008-2010 Stanford University and Simbios.
  * Contributors: Peter Eastman
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -22,64 +22,54 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __ReferenceMonteCarloBarostat_H__
-#define __ReferenceMonteCarloBarostat_H__
+#ifndef __ReferenceAndersenThermostat_H__
+#define __ReferenceAndersenThermostat_H__
 
-#include "../SimTKUtilities/SimTKOpenMMCommon.h"
-#include <utility>
+#include "SimTKOpenMMCommon.h"
 #include <vector>
 
 // ---------------------------------------------------------------------------------------
 
-class ReferenceMonteCarloBarostat {
+class ReferenceAndersenThermostat {
 
    private:
-
-       std::vector<RealOpenMM> savedAtomPositions[3];
-       std::vector<std::vector<int> > molecules;
-
+       
    public:
 
       /**---------------------------------------------------------------------------------------
-
+      
          Constructor
-
+      
          --------------------------------------------------------------------------------------- */
 
-       ReferenceMonteCarloBarostat(int numAtoms, const std::vector<std::vector<int> >& molecules);
+       ReferenceAndersenThermostat( );
 
       /**---------------------------------------------------------------------------------------
-
+      
          Destructor
-
+      
          --------------------------------------------------------------------------------------- */
 
-       ~ReferenceMonteCarloBarostat();
+       ~ReferenceAndersenThermostat( );
 
       /**---------------------------------------------------------------------------------------
-
-         Apply the barostat at the start of a time step.
-
-         @param atomPositions      atom positions
-         @param boxSize            the periodic box dimensions
-         @param scale              the factor by which to scale atom positions
-
+      
+         Apply the thermostat at the start of a time step.
+      
+         @param atomGroups         the groups of atoms to apply the thermostat to
+         @param atomVelocities     atom velocities
+         @param atomMasses         atom masses
+         @param temperature        thermostat temperature in Kelvin
+         @param collisionFrequency collision frequency for each atom in fs^-1
+         @param stepSize           integration step size in fs
+                  
          --------------------------------------------------------------------------------------- */
-
-      void applyBarostat(std::vector<OpenMM::RealVec>& atomPositions, const OpenMM::RealVec& boxSize, RealOpenMM scale);
-
-      /**---------------------------------------------------------------------------------------
-
-         Restore atom positions to what they were before applyBarostat() was called.
-
-         @param atomPositions      atom positions
-
-         --------------------------------------------------------------------------------------- */
-
-      void restorePositions(std::vector<OpenMM::RealVec>& atomPositions);
-
+          
+      void applyThermostat( const std::vector<std::vector<int> >& atomGroups, std::vector<OpenMM::RealVec>& atomVelocities, std::vector<RealOpenMM>& atomMasses,
+              RealOpenMM temperature, RealOpenMM collisionFrequency, RealOpenMM stepSize ) const;
+      
 };
 
 // ---------------------------------------------------------------------------------------
 
-#endif // __ReferenceMonteCarloBarostat_H__
+#endif // __ReferenceAndersenThermostat_H__

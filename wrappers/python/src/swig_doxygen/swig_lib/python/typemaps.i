@@ -2,7 +2,7 @@
 /* Convert python list of tuples to C++ std::vector of Vec3 objects */
 %typemap(in) std::vector<Vec3>& (std::vector<OpenMM::Vec3> vVec) {
   // typemap -- %typemap(in) std::vector<Vec3>& (std::vector<OpenMM::Vec3> vVec)
-  int i, pLength;
+  int i, pLength, itemLength;
   double x, y, z;
   PyObject *o;
   PyObject *o1;
@@ -10,6 +10,11 @@
   pLength=(int)PySequence_Length($input);
   for (i=0; i<pLength; i++) {
     o=PySequence_GetItem($input, i);
+    itemLength = (int) PySequence_Length(o);
+    if (itemLength != 3) {
+      PyErr_SetString(PyExc_TypeError, "Item must have length 3");
+      return NULL;
+    }
 
     o1=PySequence_GetItem(o, 0);
     x=PyFloat_AsDouble(o1);
@@ -31,6 +36,10 @@
 
 
 /* Convert python tuple to C++ Vec3 object*/
+%typemap(typecheck) Vec3 {
+  // typemap -- %typemap(typecheck) Vec3
+  $1 = (PySequence_Length($input) >= 3 ? 1 : 0);
+}
 %typemap(in) Vec3 {
   // typemap -- %typemap(in) Vec3
   double x, y, z;
@@ -49,6 +58,10 @@
   Py_DECREF(o);
 
   $1 = OpenMM::Vec3(x, y, z);
+}
+%typemap(typecheck) const Vec3& {
+  // typemap -- %typemap(typecheck) Vec3
+  $1 = (PySequence_Length($input) >= 3 ? 1 : 0);
 }
 %typemap(in) const Vec3& (OpenMM::Vec3 myVec) {
   // typemap -- %typemap(in) Vec3
@@ -69,6 +82,13 @@
 
   myVec = OpenMM::Vec3(x, y, z);
   $1 = &myVec;
+}
+%typemap(out) Vec3 {
+  PyObject* mm = PyImport_AddModule("simtk.openmm");
+  PyObject* vec3 = PyObject_GetAttrString(mm, "Vec3");
+  PyObject* args = Py_BuildValue("(d,d,d)", ($1)[0], ($1)[1], ($1)[2]);
+  $result = PyObject_CallObject(vec3, args);
+  Py_DECREF(args);
 }
 
 /* Convert C++ (Vec3&, Vec3&, Vec3&) object to python tuple or tuples */

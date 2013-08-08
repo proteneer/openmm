@@ -10,7 +10,7 @@ Portions copyright (c) 2012-2013 Stanford University and the Authors.
 Authors: Peter Eastman
 Contributors: Robert McGibbon
 
-Permission is hereby granted, free of charge, to any person obtaining a 
+Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
 to deal in the Software without restriction, including without limitation
 the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -35,7 +35,7 @@ import simtk.openmm as mm
 import simtk.unit as unit
 from simtk.openmm.app import PDBFile
 import math
-    
+
 class StateDataReporter(object):
     """StateDataReporter outputs information about a simulation, such as energy and temperature, to a file.
 
@@ -67,7 +67,7 @@ class StateDataReporter(object):
         self._reportInterval = reportInterval
         self._openedFile = isinstance(file, str)
         if self._openedFile:
-            self._out = open(file, 'w')
+            self._out = open(file, 'w', 0)
         else:
             self._out = file
         self._step = step
@@ -109,6 +109,7 @@ class StateDataReporter(object):
             self._initializeConstants(simulation)
             headers = self._constructHeaders()
             print >>self._out, '#"%s"' % ('"'+self._separator+'"').join(headers)
+            self._out.flush()
             self._hasInitialized = True
 
         # Check for errors.
@@ -119,6 +120,7 @@ class StateDataReporter(object):
 
         # Write the values.
         print >>self._out, self._separator.join(str(v) for v in values)
+        self._out.flush()
 
     def _constructReportValues(self, simulation, state):
         """Query the simulation for the current state of our observables of interest.

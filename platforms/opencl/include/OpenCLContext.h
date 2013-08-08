@@ -1,5 +1,5 @@
-#ifndef OPENMM_CUDACONTEXT_H_
-#define OPENMM_CUDACONTEXT_H_
+#ifndef OPENMM_OPENCLCONTEXT_H_
+#define OPENMM_OPENCLCONTEXT_H_
 
 /* -------------------------------------------------------------------------- *
  *                                   OpenMM                                   *
@@ -9,7 +9,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2009-2012 Stanford University and the Authors.      *
+ * Portions copyright (c) 2009-2013 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -36,36 +36,124 @@
     // Prevent Windows from defining macros that interfere with other code.
     #define NOMINMAX
 #endif
-#include <cuda.h>
-#include <builtin_types.h>
-#include <vector_functions.h>
-#include "windowsExportCuda.h"
-#include "CudaPlatform.h"
-
-typedef unsigned int tileflags;
+#include <cl.hpp>
+#include "windowsExportOpenCL.h"
+#include "OpenCLPlatform.h"
 
 namespace OpenMM {
 
-class CudaArray;
-class CudaForceInfo;
-class CudaExpressionUtilities;
-class CudaIntegrationUtilities;
-class CudaBondedUtilities;
-class CudaNonbondedUtilities;
+class OpenCLArray;
+class OpenCLForceInfo;
+class OpenCLIntegrationUtilities;
+class OpenCLExpressionUtilities;
+class OpenCLBondedUtilities;
+class OpenCLNonbondedUtilities;
 class System;
 
 /**
- * This class contains the information associated with a Context by the CUDA Platform.  Each CudaContext is
+ * We can't use predefined vector types like cl_float4, since different OpenCL implementations currently define
+ * them in incompatible ways.  Hopefully that will be fixed in the future.  In the mean time, we define our own
+ * types to represent them on the host.
+ */
+
+struct mm_float2 {
+    cl_float x, y;
+    mm_float2() {
+    }
+    mm_float2(cl_float x, cl_float y) : x(x), y(y) {
+    }
+};
+struct mm_float4 {
+    cl_float x, y, z, w;
+    mm_float4() {
+    }
+    mm_float4(cl_float x, cl_float y, cl_float z, cl_float w) : x(x), y(y), z(z), w(w) {
+    }
+};
+struct mm_float8 {
+    cl_float s0, s1, s2, s3, s4, s5, s6, s7;
+    mm_float8() {
+    }
+    mm_float8(cl_float s0, cl_float s1, cl_float s2, cl_float s3, cl_float s4, cl_float s5, cl_float s6, cl_float s7) :
+        s0(s0), s1(s1), s2(s2), s3(s3), s4(s4), s5(s5), s6(s6), s7(s7) {
+    }
+};
+struct mm_float16 {
+    cl_float s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15;
+    mm_float16() {
+    }
+    mm_float16(cl_float s0, cl_float s1, cl_float s2, cl_float s3, cl_float s4, cl_float s5, cl_float s6, cl_float s7,
+            cl_float s8, cl_float s9, cl_float s10, cl_float s11, cl_float s12, cl_float s13, cl_float s14, cl_float s15) :
+        s0(s0), s1(s1), s2(s2), s3(s3), s4(s4), s5(s5), s6(s6), s7(s7),
+        s8(s8), s9(s9), s10(s10), s11(s11), s12(s12), s13(s13), s14(s14), s15(15) {
+    }
+};
+struct mm_double2 {
+    cl_double x, y;
+    mm_double2() {
+    }
+    mm_double2(cl_double x, cl_double y) : x(x), y(y) {
+    }
+};
+struct mm_double4 {
+    cl_double x, y, z, w;
+    mm_double4() {
+    }
+    mm_double4(cl_double x, cl_double y, cl_double z, cl_double w) : x(x), y(y), z(z), w(w) {
+    }
+};
+struct mm_ushort2 {
+    cl_ushort x, y;
+    mm_ushort2() {
+    }
+    mm_ushort2(cl_ushort x, cl_ushort y) : x(x), y(y) {
+    }
+};
+struct mm_int2 {
+    cl_int x, y;
+    mm_int2() {
+    }
+    mm_int2(cl_int x, cl_int y) : x(x), y(y) {
+    }
+};
+struct mm_int4 {
+    cl_int x, y, z, w;
+    mm_int4() {
+    }
+    mm_int4(cl_int x, cl_int y, cl_int z, cl_int w) : x(x), y(y), z(z), w(w) {
+    }
+};
+struct mm_int8 {
+    cl_int s0, s1, s2, s3, s4, s5, s6, s7;
+    mm_int8() {
+    }
+    mm_int8(cl_int s0, cl_int s1, cl_int s2, cl_int s3, cl_int s4, cl_int s5, cl_int s6, cl_int s7) :
+        s0(s0), s1(s1), s2(s2), s3(s3), s4(s4), s5(s5), s6(s6), s7(s7) {
+    }
+};
+struct mm_int16 {
+    cl_int s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15;
+    mm_int16() {
+    }
+    mm_int16(cl_int s0, cl_int s1, cl_int s2, cl_int s3, cl_int s4, cl_int s5, cl_int s6, cl_int s7,
+            cl_int s8, cl_int s9, cl_int s10, cl_int s11, cl_int s12, cl_int s13, cl_int s14, cl_int s15) :
+        s0(s0), s1(s1), s2(s2), s3(s3), s4(s4), s5(s5), s6(s6), s7(s7),
+        s8(s8), s9(s9), s10(s10), s11(s11), s12(s12), s13(s13), s14(s14), s15(15) {
+    }
+};
+
+/**
+ * This class contains the information associated with a Context by the OpenCL Platform.  Each OpenCLContext is
  * specific to a particular device, and manages data structures and kernels for that device.  When running a simulation
- * in parallel on multiple devices, there is a separate CudaContext for each one.  The list of all contexts is
- * stored in the CudaPlatform::PlatformData.
+ * in parallel on multiple devices, there is a separate OpenCLContext for each one.  The list of all contexts is
+ * stored in the OpenCLPlatform::PlatformData.
  * <p>
- * In addition, a worker thread is created for each CudaContext.  This is used for parallel computations, so that
+ * In addition, a worker thread is created for each OpenCLContext.  This is used for parallel computations, so that
  * blocking calls to one device will not block other devices.  When only a single device is being used, the worker
  * thread is not used and calculations are performed on the main application thread.
  */
 
-class OPENMM_EXPORT_CUDA CudaContext {
+class OPENMM_EXPORT_OPENCL OpenCLContext {
 public:
     class WorkTask;
     class WorkThread;
@@ -74,57 +162,39 @@ public:
     class ForcePostComputation;
     static const int ThreadBlockSize;
     static const int TileSize;
-    CudaContext(const System& system, int deviceIndex, bool useBlockingSync, const std::string& precision,
-            const std::string& compiler, const std::string& tempDir, CudaPlatform::PlatformData& platformData);
-    ~CudaContext();
+    OpenCLContext(const System& system, int platformIndex, int deviceIndex, const std::string& precision, OpenCLPlatform::PlatformData& platformData);
+    ~OpenCLContext();
     /**
      * This is called to initialize internal data structures after all Forces in the system
      * have been initialized.
      */
     void initialize();
     /**
-     * Add a CudaForce to this context.
+     * Add an OpenCLForce to this context.
      */
-    void addForce(CudaForceInfo* force);
+    void addForce(OpenCLForceInfo* force);
     /**
-     * Get the CUcontext associated with this object.
+     * Get the cl::Context associated with this object.
      */
-    CUcontext getContext() {
+    cl::Context& getContext() {
         return context;
     }
     /**
-     * Get whether the CUcontext associated with this object is currently a valid contex.
+     * Get the cl::Device associated with this object.
      */
-    bool getContextIsValid() const {
-        return contextIsValid;
-    }
-    /**
-     * Set the CUcontext associated with this object to be the current context.  If the context is not
-     * valid, this returns without doing anything.
-     */
-    void setAsCurrent();
-    /**
-     * Get the CUdevice associated with this object.
-     */
-    CUdevice getDevice() {
+    cl::Device& getDevice() {
         return device;
     }
     /**
-     * Get the compute capability of the device associated with this object.
+     * Get the index of the cl::Device associated with this object.
      */
-    double getComputeCapability() const {
-        return computeCapability;
-    }
-    /**
-     * Get the index of the CUdevice associated with this object.
-     */
-    int getDeviceIndex() const {
+    int getDeviceIndex() {
         return deviceIndex;
     }
     /**
      * Get the PlatformData object this context is part of.
      */
-    CudaPlatform::PlatformData& getPlatformData() {
+    OpenCLPlatform::PlatformData& getPlatformData() {
         return platformData;
     }
     /**
@@ -134,33 +204,51 @@ public:
         return contextIndex;
     }
     /**
+     * Get the cl::CommandQueue associated with this object.
+     */
+    cl::CommandQueue& getQueue() {
+        return queue;
+    }
+    /**
      * Get the array which contains the position (the xyz components) and charge (the w component) of each atom.
      */
-    CudaArray& getPosq() {
+    OpenCLArray& getPosq() {
         return *posq;
     }
     /**
      * Get the array which contains a correction to the position of each atom.  This only exists if getUseMixedPrecision() returns true.
      */
-    CudaArray& getPosqCorrection() {
+    OpenCLArray& getPosqCorrection() {
         return *posqCorrection;
     }
     /**
      * Get the array which contains the velocity (the xyz components) and inverse mass (the w component) of each atom.
      */
-    CudaArray& getVelm() {
+    OpenCLArray& getVelm() {
         return *velm;
     }
     /**
-     * Get the array which contains the force on each atom (represented as three long longs in 64 bit fixed point).
+     * Get the array which contains the force on each atom.
      */
-    CudaArray& getForce() {
+    OpenCLArray& getForce() {
         return *force;
+    }
+    /**
+     * Get the array which contains the buffers in which forces are computed.
+     */
+    OpenCLArray& getForceBuffers() {
+        return *forceBuffers;
+    }
+    /**
+     * Get the array which contains a contribution to each force represented as 64 bit fixed point.
+     */
+    OpenCLArray& getLongForceBuffer() {
+        return *longForceBuffer;
     }
     /**
      * Get the array which contains the buffer in which energy is computed.
      */
-    CudaArray& getEnergyBuffer() {
+    OpenCLArray& getEnergyBuffer() {
         return *energyBuffer;
     }
     /**
@@ -168,7 +256,7 @@ public:
      * This is guaranteed to be at least as large as any of the arrays returned by methods of this class.
      */
     void* getPinnedBuffer() {
-        return pinnedBuffer;
+        return pinnedMemory;
     }
     /**
      * Get the host-side vector which contains the index of each atom.
@@ -179,13 +267,13 @@ public:
     /**
      * Get the array which contains the index of each atom.
      */
-    CudaArray& getAtomIndexArray() {
+    OpenCLArray& getAtomIndexArray() {
         return *atomIndexDevice;
     }
     /**
      * Get the number of cells by which the positions are offset.
      */
-    std::vector<int4>& getPosCellOffsets() {
+    std::vector<mm_int4>& getPosCellOffsets() {
         return posCellOffsets;
     }
     /**
@@ -197,73 +285,68 @@ public:
      */
     std::string replaceStrings(const std::string& input, const std::map<std::string, std::string>& replacements) const;
     /**
-     * Create a CUDA module from source code.
+     * Create an OpenCL Program from source code.
      *
-     * @param source             the source code of the module
-     * @param optimizationFlags  the optimization flags to pass to the CUDA compiler.  If this is
+     * @param source             the source code of the program
+     * @param optimizationFlags  the optimization flags to pass to the OpenCL compiler.  If this is
      *                           omitted, a default set of options will be used
      */
-    CUmodule createModule(const std::string source, const char* optimizationFlags = NULL);
+    cl::Program createProgram(const std::string source, const char* optimizationFlags = NULL);
     /**
-     * Create a CUDA module from source code.
+     * Create an OpenCL Program from source code.
      *
-     * @param source             the source code of the module
+     * @param source             the source code of the program
      * @param defines            a set of preprocessor definitions (name, value) to define when compiling the program
-     * @param optimizationFlags  the optimization flags to pass to the CUDA compiler.  If this is
+     * @param optimizationFlags  the optimization flags to pass to the OpenCL compiler.  If this is
      *                           omitted, a default set of options will be used
      */
-    CUmodule createModule(const std::string source, const std::map<std::string, std::string>& defines, const char* optimizationFlags = NULL);
-    /**
-     * Get a kernel from a CUDA module.
-     *
-     * @param module    the module to get the kernel from
-     * @param name      the name of the kernel to get
-     */
-    CUfunction getKernel(CUmodule& module, const std::string& name);
+    cl::Program createProgram(const std::string source, const std::map<std::string, std::string>& defines, const char* optimizationFlags = NULL);
     /**
      * Execute a kernel.
      *
      * @param kernel       the kernel to execute
-     * @param arguments    an array of pointers to the kernel arguments
-     * @param threads      the maximum number of threads that should be used
+     * @param workUnits    the maximum number of work units that should be used
      * @param blockSize    the size of each thread block to use
-     * @param sharedSize   the amount of dynamic shared memory to allocated for the kernel, in bytes
      */
-    void executeKernel(CUfunction kernel, void** arguments, int workUnits, int blockSize = -1, unsigned int sharedSize = 0);
-    /**
-     * Compute the largest thread block size that can be used for a kernel that requires a particular amount of
-     * shared memory per thread.
-     * 
-     * @param memory        the number of bytes of shared memory per thread
-     * @param preferShared  whether the kernel is set to prefer shared memory over cache
-     */
-    int computeThreadBlockSize(double memory, bool preferShared=true) const;
+    void executeKernel(cl::Kernel& kernel, int workUnits, int blockSize = -1);
     /**
      * Set all elements of an array to 0.
      */
-    void clearBuffer(CudaArray& array);
+    void clearBuffer(OpenCLArray& array);
     /**
      * Set all elements of an array to 0.
      *
-     * @param memory     the memory to clear
+     * @param memory     the Memory to clear
      * @param size       the size of the buffer in bytes
      */
-    void clearBuffer(CUdeviceptr memory, int size);
+    void clearBuffer(cl::Memory& memory, int size);
     /**
      * Register a buffer that should be automatically cleared (all elements set to 0) at the start of each force or energy computation.
      */
-    void addAutoclearBuffer(CudaArray& array);
+    void addAutoclearBuffer(OpenCLArray& array);
     /**
      * Register a buffer that should be automatically cleared (all elements set to 0) at the start of each force or energy computation.
      *
-     * @param memory     the memory to clear
+     * @param memory     the Memory to clear
      * @param size       the size of the buffer in bytes
      */
-    void addAutoclearBuffer(CUdeviceptr memory, int size);
+    void addAutoclearBuffer(cl::Memory& memory, int size);
     /**
      * Clear all buffers that have been registered with addAutoclearBuffer().
      */
     void clearAutoclearBuffers();
+    /**
+     * Given a collection of floating point buffers packed into an array, sum them and store
+     * the sum in the first buffer.
+     *
+     * @param array       the array containing the buffers to reduce
+     * @param numBuffers  the number of buffers packed into the array
+     */
+    void reduceBuffer(OpenCLArray& array, int numBuffers);
+    /**
+     * Sum the buffesr containing forces.
+     */
+    void reduceForces();
     /**
      * Get the current simulation time.
      */
@@ -338,6 +421,30 @@ public:
         return numThreadBlocks;
     }
     /**
+     * Get the number of force buffers.
+     */
+    int getNumForceBuffers() const {
+        return numForceBuffers;
+    }
+    /**
+     * Get the SIMD width of the device being used.
+     */
+    int getSIMDWidth() const {
+        return simdWidth;
+    }
+    /**
+     * Get whether the device being used supports 64 bit atomic operations on global memory.
+     */
+    bool getSupports64BitGlobalAtomics() {
+        return supports64BitGlobalAtomics;
+    }
+    /**
+     * Get whether the device being used supports double precision math.
+     */
+    bool getSupportsDoublePrecision() {
+        return supportsDoublePrecision;
+    }
+    /**
      * Get whether double precision is being used.
      */
     bool getUseDoublePrecision() {
@@ -359,67 +466,60 @@ public:
      */
     std::string intToString(int value);
     /**
-     * Convert a CUDA result code to the corresponding string description.
+     * Get the size of the periodic box.
      */
-    static std::string getErrorString(CUresult result);
-    
+    mm_float4 getPeriodicBoxSize() const {
+        return periodicBoxSize;
+    }
     /**
      * Get the size of the periodic box.
      */
-    double4 getPeriodicBoxSize() const {
-        return periodicBoxSize;
+    mm_double4 getPeriodicBoxSizeDouble() const {
+        return periodicBoxSizeDouble;
     }
     /**
      * Set the size of the periodic box.
      */
     void setPeriodicBoxSize(double xsize, double ysize, double zsize) {
-        periodicBoxSize = make_double4(xsize, ysize, zsize, 0.0);
-        invPeriodicBoxSize = make_double4(1.0/xsize, 1.0/ysize, 1.0/zsize, 0.0);
-        periodicBoxSizeFloat = make_float4((float) xsize, (float) ysize, (float) zsize, 0.0f);
-        invPeriodicBoxSizeFloat = make_float4(1.0f/(float) xsize, 1.0f/(float) ysize, 1.0f/(float) zsize, 0.0f);
+        periodicBoxSize = mm_float4((float) xsize, (float) ysize, (float) zsize, 0);
+        invPeriodicBoxSize = mm_float4((float) (1.0/xsize), (float) (1.0/ysize), (float) (1.0/zsize), 0);
+        periodicBoxSizeDouble = mm_double4(xsize, ysize, zsize, 0);
+        invPeriodicBoxSizeDouble = mm_double4(1.0/xsize, 1.0/ysize, 1.0/zsize, 0);
     }
     /**
      * Get the inverse of the size of the periodic box.
      */
-    double4 getInvPeriodicBoxSize() const {
+    mm_float4 getInvPeriodicBoxSize() const {
         return invPeriodicBoxSize;
     }
     /**
-     * Get a pointer to the size of the periodic box, represented as either a float4 or double4 depending on
-     * this context's precision.  This value is suitable for passing to kernels as an argument.
+     * Get the inverse of the size of the periodic box.
      */
-    void* getPeriodicBoxSizePointer() {
-        return (useDoublePrecision ? reinterpret_cast<void*>(&periodicBoxSize) : reinterpret_cast<void*>(&periodicBoxSizeFloat));
+    mm_double4 getInvPeriodicBoxSizeDouble() const {
+        return invPeriodicBoxSizeDouble;
     }
     /**
-     * Get a pointer to the inverse of the size of the periodic box, represented as either a float4 or double4 depending on
-     * this context's precision.  This value is suitable for passing to kernels as an argument.
+     * Get the OpenCLIntegrationUtilities for this context.
      */
-    void* getInvPeriodicBoxSizePointer() {
-        return (useDoublePrecision ? reinterpret_cast<void*>(&invPeriodicBoxSize) : reinterpret_cast<void*>(&invPeriodicBoxSizeFloat));
-    }
-    /**
-     * Get the CudaIntegrationUtilities for this context.
-     */
-    CudaIntegrationUtilities& getIntegrationUtilities() {
+    OpenCLIntegrationUtilities& getIntegrationUtilities() {
         return *integration;
     }
     /**
-     * Get the CudaExpressionUtilities for this context.
+     * Get the OpenCLExpressionUtilities for this context.
      */
-    CudaExpressionUtilities& getExpressionUtilities() {
+    OpenCLExpressionUtilities& getExpressionUtilities() {
         return *expression;
     }
     /**
-     * Get the CudaBondedUtilities for this context.
+     * Get the OpenCLBondedUtilities for this context.
      */
-    CudaBondedUtilities& getBondedUtilities() {
+    OpenCLBondedUtilities& getBondedUtilities() {
         return *bonded;
     }
     /**
-     * Get the CudaNonbondedUtilities for this context.
+     * Get the OpenCLNonbondedUtilities for this context.
      */
-    CudaNonbondedUtilities& getNonbondedUtilities() {
+    OpenCLNonbondedUtilities& getNonbondedUtilities() {
         return *nonbonded;
     }
     /**
@@ -446,7 +546,7 @@ public:
      */
     void reorderAtoms();
     /**
-     * Add a listener that should be called whenever atoms get reordered.  The CudaContext
+     * Add a listener that should be called whenever atoms get reordered.  The OpenCLContext
      * assumes ownership of the object, and deletes it when the context itself is deleted.
      */
     void addReorderListener(ReorderListener* listener);
@@ -458,7 +558,7 @@ public:
     }
     /**
      * Add a pre-computation that should be called at the very start of force and energy evaluations.
-     * The CudaContext assumes ownership of the object, and deletes it when the context itself is deleted.
+     * The OpenCLContext assumes ownership of the object, and deletes it when the context itself is deleted.
      */
     void addPreComputation(ForcePreComputation* computation);
     /**
@@ -469,7 +569,7 @@ public:
     }
     /**
      * Add a post-computation that should be called at the very end of force and energy evaluations.
-     * The CudaContext assumes ownership of the object, and deletes it when the context itself is deleted.
+     * The OpenCLContext assumes ownership of the object, and deletes it when the context itself is deleted.
      */
     void addPostComputation(ForcePostComputation* computation);
     /**
@@ -489,7 +589,6 @@ private:
     struct MoleculeGroup;
     class VirtualSiteInfo;
     void findMoleculeGroups();
-    static void tagAtomsInMolecule(int atom, int molecule, std::vector<int>& atomMolecule, std::vector<std::vector<int> >& atomBonds);
     /**
      * Ensure that all molecules marked as "identical" really are identical.  This should be
      * called whenever force field parameters change.  If necessary, it will rebuild the list
@@ -501,10 +600,9 @@ private:
      */
     template <class Real, class Real4, class Mixed, class Mixed4>
     void reorderAtomsImpl();
-    static bool hasInitializedCuda;
     const System& system;
-    double time, computeCapability;
-    CudaPlatform::PlatformData& platformData;
+    double time;
+    OpenCLPlatform::PlatformData& platformData;
     int deviceIndex;
     int contextIndex;
     int stepCount;
@@ -514,51 +612,58 @@ private:
     int paddedNumAtoms;
     int numAtomBlocks;
     int numThreadBlocks;
-    bool useBlockingSync, useDoublePrecision, useMixedPrecision, contextIsValid, atomsWereReordered;
-    std::string compiler, tempDir, gpuArchitecture;
-    float4 periodicBoxSizeFloat, invPeriodicBoxSizeFloat;
-    double4 periodicBoxSize, invPeriodicBoxSize;
+    int numForceBuffers;
+    int simdWidth;
+    bool supports64BitGlobalAtomics, supportsDoublePrecision, useDoublePrecision, useMixedPrecision, atomsWereReordered;
+    mm_float4 periodicBoxSize, invPeriodicBoxSize;
+    mm_double4 periodicBoxSizeDouble, invPeriodicBoxSizeDouble;
     std::string defaultOptimizationOptions;
     std::map<std::string, std::string> compilationDefines;
-    CUcontext context;
-    CUdevice device;
-    CUfunction clearBufferKernel;
-    CUfunction clearTwoBuffersKernel;
-    CUfunction clearThreeBuffersKernel;
-    CUfunction clearFourBuffersKernel;
-    CUfunction clearFiveBuffersKernel;
-    CUfunction clearSixBuffersKernel;
-    std::vector<CudaForceInfo*> forces;
+    cl::Context context;
+    cl::Device device;
+    cl::CommandQueue queue;
+    cl::Kernel clearBufferKernel;
+    cl::Kernel clearTwoBuffersKernel;
+    cl::Kernel clearThreeBuffersKernel;
+    cl::Kernel clearFourBuffersKernel;
+    cl::Kernel clearFiveBuffersKernel;
+    cl::Kernel clearSixBuffersKernel;
+    cl::Kernel reduceReal4Kernel;
+    cl::Kernel reduceForcesKernel;
+    std::vector<OpenCLForceInfo*> forces;
     std::vector<Molecule> molecules;
     std::vector<MoleculeGroup> moleculeGroups;
-    std::vector<int4> posCellOffsets;
-    void* pinnedBuffer;
-    CudaArray* posq;
-    CudaArray* posqCorrection;
-    CudaArray* velm;
-    CudaArray* force;
-    CudaArray* energyBuffer;
-    CudaArray* atomIndexDevice;
+    std::vector<mm_int4> posCellOffsets;
+    cl::Buffer* pinnedBuffer;
+    void* pinnedMemory;
+    OpenCLArray* posq;
+    OpenCLArray* posqCorrection;
+    OpenCLArray* velm;
+    OpenCLArray* force;
+    OpenCLArray* forceBuffers;
+    OpenCLArray* longForceBuffer;
+    OpenCLArray* energyBuffer;
+    OpenCLArray* atomIndexDevice;
     std::vector<int> atomIndex;
-    std::vector<CUdeviceptr> autoclearBuffers;
+    std::vector<cl::Memory*> autoclearBuffers;
     std::vector<int> autoclearBufferSizes;
     std::vector<ReorderListener*> reorderListeners;
     std::vector<ForcePreComputation*> preComputations;
     std::vector<ForcePostComputation*> postComputations;
-    CudaIntegrationUtilities* integration;
-    CudaExpressionUtilities* expression;
-    CudaBondedUtilities* bonded;
-    CudaNonbondedUtilities* nonbonded;
+    OpenCLIntegrationUtilities* integration;
+    OpenCLExpressionUtilities* expression;
+    OpenCLBondedUtilities* bonded;
+    OpenCLNonbondedUtilities* nonbonded;
     WorkThread* thread;
 };
 
-struct CudaContext::Molecule {
+struct OpenCLContext::Molecule {
     std::vector<int> atoms;
     std::vector<int> constraints;
     std::vector<std::vector<int> > groups;
 };
 
-struct CudaContext::MoleculeGroup {
+struct OpenCLContext::MoleculeGroup {
     std::vector<int> atoms;
     std::vector<int> instances;
     std::vector<int> offsets;
@@ -567,14 +672,14 @@ struct CudaContext::MoleculeGroup {
 /**
  * This abstract class defines a task to be executed on the worker thread.
  */
-class CudaContext::WorkTask {
+class OpenCLContext::WorkTask {
 public:
     virtual void execute() = 0;
     virtual ~WorkTask() {
     }
 };
 
-class CudaContext::WorkThread {
+class OpenCLContext::WorkThread {
 public:
     struct ThreadData;
     WorkThread();
@@ -583,7 +688,7 @@ public:
      * Request that a task be executed on the worker thread.  The argument should have been allocated on the
      * heap with the "new" operator.  After its execute() method finishes, the object will be deleted automatically.
      */
-    void addTask(CudaContext::WorkTask* task);
+    void addTask(OpenCLContext::WorkTask* task);
     /**
      * Get whether the worker thread is idle, waiting for a task to be added.
      */
@@ -597,7 +702,7 @@ public:
      */
     void flush();
 private:
-    std::queue<CudaContext::WorkTask*> tasks;
+    std::queue<OpenCLContext::WorkTask*> tasks;
     bool waiting, finished;
     pthread_mutex_t queueLock;
     pthread_cond_t waitForTaskCondition, queueEmptyCondition;
@@ -609,7 +714,7 @@ private:
  * Objects that need to know when reordering happens should create a ReorderListener
  * and register it by calling addReorderListener().
  */
-class CudaContext::ReorderListener {
+class OpenCLContext::ReorderListener {
 public:
     virtual void execute() = 0;
     virtual ~ReorderListener() {
@@ -622,7 +727,7 @@ public:
  * that need to be performed at a nonstandard point in the process.  After creating a
  * ForcePreComputation, register it by calling addForcePreComputation().
  */
-class CudaContext::ForcePreComputation {
+class OpenCLContext::ForcePreComputation {
 public:
     /**
      * @param includeForce  true if forces should be computed
@@ -638,7 +743,7 @@ public:
  * that need to be performed at a nonstandard point in the process.  After creating a
  * ForcePostComputation, register it by calling addForcePostComputation().
  */
-class CudaContext::ForcePostComputation {
+class OpenCLContext::ForcePostComputation {
 public:
     /**
      * @param includeForce  true if forces should be computed
@@ -651,4 +756,4 @@ public:
 
 } // namespace OpenMM
 
-#endif /*OPENMM_CUDACONTEXT_H_*/
+#endif /*OPENMM_OPENCLCONTEXT_H_*/

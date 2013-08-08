@@ -41,7 +41,7 @@
 #include "openmm/VerletIntegrator.h"
 #include "openmm/internal/ContextImpl.h"
 #include "../src/CpuPmeKernels.h"
-#include "../src/SimTKUtilities/SimTKOpenMMRealType.h"
+#include "SimTKOpenMMRealType.h"
 #include "sfmt/SFMT.h"
 #include <iostream>
 #include <vector>
@@ -124,6 +124,10 @@ void testPME() {
 
 int main(int argc, char* argv[]) {
     try {
+        if (!CpuCalcPmeReciprocalForceKernel::isProcessorSupported()) {
+            cout << "CPU is not supported.  Exiting." << endl;
+            return 0;
+        }
         testPME();
     }
     catch(const exception& e) {

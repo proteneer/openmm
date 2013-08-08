@@ -44,8 +44,8 @@
 #include "lepton/Operation.h"
 #include "lepton/Parser.h"
 #include "lepton/ParsedExpression.h"
-#include "../src/SimTKUtilities/SimTKOpenMMRealType.h"
-#include "../src/SimTKUtilities/SimTKOpenMMUtilities.h"
+#include "SimTKOpenMMRealType.h"
+#include "SimTKOpenMMUtilities.h"
 #include <cmath>
 #include <set>
 
@@ -388,7 +388,6 @@ void CudaApplyConstraintsKernel::apply(ContextImpl& context, double tol) {
     if (!hasInitializedKernel) {
         hasInitializedKernel = true;
         map<string, string> defines;
-        defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
         CUmodule module = cu.createModule(CudaKernelSources::constraints, defines);
         applyDeltasKernel = cu.getKernel(module, "applyPositionDeltas");
     }
@@ -396,7 +395,8 @@ void CudaApplyConstraintsKernel::apply(ContextImpl& context, double tol) {
     cu.clearBuffer(integration.getPosDelta());
     integration.applyConstraints(tol);
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args[] = {&cu.getPosq().getDevicePointer(), &posCorrection, &cu.getIntegrationUtilities().getPosDelta().getDevicePointer()};
+    int numAtoms = cu.getNumAtoms();
+    void* args[] = {&numAtoms, &cu.getPosq().getDevicePointer(), &posCorrection, &cu.getIntegrationUtilities().getPosDelta().getDevicePointer()};
     cu.executeKernel(applyDeltasKernel, args, cu.getNumAtoms());
     integration.computeVirtualSites();
 }
@@ -4156,8 +4156,6 @@ void CudaIntegrateVerletStepKernel::initialize(const System& system, const Verle
     cu.getPlatformData().initializeContexts(system);
     cu.setAsCurrent();
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::verlet, defines, "");
     kernel1 = cu.getKernel(module, "integrateVerletPart1");
     kernel2 = cu.getKernel(module, "integrateVerletPart2");
@@ -4168,6 +4166,7 @@ void CudaIntegrateVerletStepKernel::execute(ContextImpl& context, const VerletIn
     cu.setAsCurrent();
     CudaIntegrationUtilities& integration = cu.getIntegrationUtilities();
     int numAtoms = cu.getNumAtoms();
+    int paddedNumAtoms = cu.getPaddedNumAtoms();
     double dt = integrator.getStepSize();
     if (dt != prevStepSize) {
         if (cu.getUseDoublePrecision() || cu.getUseMixedPrecision()) {
@@ -4186,7 +4185,7 @@ void CudaIntegrateVerletStepKernel::execute(ContextImpl& context, const VerletIn
     // Call the first integration kernel.
 
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args1[] = {&cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
+    void* args1[] = {&numAtoms, &paddedNumAtoms, &cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
             &cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer()};
     cu.executeKernel(kernel1, args1, numAtoms);
 
@@ -4196,7 +4195,7 @@ void CudaIntegrateVerletStepKernel::execute(ContextImpl& context, const VerletIn
 
     // Call the second integration kernel.
 
-    void* args2[] = {&cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
+    void* args2[] = {&numAtoms, &cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
             &cu.getVelm().getDevicePointer(), &integration.getPosDelta().getDevicePointer()};
     cu.executeKernel(kernel2, args2, numAtoms);
     integration.computeVirtualSites();
@@ -4223,8 +4222,6 @@ void CudaIntegrateLangevinStepKernel::initialize(const System& system, const Lan
     cu.setAsCurrent();
     cu.getIntegrationUtilities().initRandomNumberGenerator(integrator.getRandomNumberSeed());
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::langevin, defines, "");
     kernel1 = cu.getKernel(module, "integrateLangevinPart1");
     kernel2 = cu.getKernel(module, "integrateLangevinPart2");
@@ -4236,6 +4233,7 @@ void CudaIntegrateLangevinStepKernel::execute(ContextImpl& context, const Langev
     cu.setAsCurrent();
     CudaIntegrationUtilities& integration = cu.getIntegrationUtilities();
     int numAtoms = cu.getNumAtoms();
+    int paddedNumAtoms = cu.getPaddedNumAtoms();
     double temperature = integrator.getTemperature();
     double friction = integrator.getFriction();
     double stepSize = integrator.getStepSize();
@@ -4273,7 +4271,7 @@ void CudaIntegrateLangevinStepKernel::execute(ContextImpl& context, const Langev
     // Call the first integration kernel.
 
     int randomIndex = integration.prepareRandomNumbers(cu.getPaddedNumAtoms());
-    void* args1[] = {&cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer(),
+    void* args1[] = {&numAtoms, &paddedNumAtoms, &cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer(),
             &params->getDevicePointer(), &integration.getStepSize().getDevicePointer(), &integration.getRandom().getDevicePointer(), &randomIndex};
     cu.executeKernel(kernel1, args1, numAtoms);
 
@@ -4284,7 +4282,7 @@ void CudaIntegrateLangevinStepKernel::execute(ContextImpl& context, const Langev
     // Call the second integration kernel.
 
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args2[] = {&cu.getPosq().getDevicePointer(), &posCorrection, &integration.getPosDelta().getDevicePointer(),
+    void* args2[] = {&numAtoms, &cu.getPosq().getDevicePointer(), &posCorrection, &integration.getPosDelta().getDevicePointer(),
             &cu.getVelm().getDevicePointer(), &integration.getStepSize().getDevicePointer()};
     cu.executeKernel(kernel2, args2, numAtoms);
     integration.computeVirtualSites();
@@ -4308,8 +4306,6 @@ void CudaIntegrateBrownianStepKernel::initialize(const System& system, const Bro
     cu.setAsCurrent();
     cu.getIntegrationUtilities().initRandomNumberGenerator(integrator.getRandomNumberSeed());
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::brownian, defines, "");
     kernel1 = cu.getKernel(module, "integrateBrownianPart1");
     kernel2 = cu.getKernel(module, "integrateBrownianPart2");
@@ -4320,6 +4316,7 @@ void CudaIntegrateBrownianStepKernel::execute(ContextImpl& context, const Browni
     cu.setAsCurrent();
     CudaIntegrationUtilities& integration = cu.getIntegrationUtilities();
     int numAtoms = cu.getNumAtoms();
+    int paddedNumAtoms = cu.getPaddedNumAtoms();
     double temperature = integrator.getTemperature();
     double friction = integrator.getFriction();
     double stepSize = integrator.getStepSize();
@@ -4334,7 +4331,7 @@ void CudaIntegrateBrownianStepKernel::execute(ContextImpl& context, const Browni
     // Call the first integration kernel.
 
     int randomIndex = integration.prepareRandomNumbers(cu.getPaddedNumAtoms());
-    void* args1[] = {useDouble ? (void*) &tauDt : (void*) &tauDtFloat,
+    void* args1[] = {&numAtoms, &paddedNumAtoms, useDouble ? (void*) &tauDt : (void*) &tauDtFloat,
             useDouble ? (void*) &noise : (void*) &noiseFloat,
             &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer(),
             &cu.getVelm().getDevicePointer(), &integration.getRandom().getDevicePointer(), &randomIndex};
@@ -4347,7 +4344,7 @@ void CudaIntegrateBrownianStepKernel::execute(ContextImpl& context, const Browni
     // Call the second integration kernel.
 
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args2[] = {useDouble ? (void*) &stepSize : (void*) &stepSizeFloat,
+    void* args2[] = {&numAtoms, useDouble ? (void*) &stepSize : (void*) &stepSizeFloat,
             &cu.getPosq().getDevicePointer(), &posCorrection, &cu.getVelm().getDevicePointer(), &integration.getPosDelta().getDevicePointer()};
     cu.executeKernel(kernel2, args2, numAtoms);
     integration.computeVirtualSites();
@@ -4370,8 +4367,6 @@ void CudaIntegrateVariableVerletStepKernel::initialize(const System& system, con
     cu.getPlatformData().initializeContexts(system);
     cu.setAsCurrent();
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::verlet, defines, "");
     kernel1 = cu.getKernel(module, "integrateVerletPart1");
     kernel2 = cu.getKernel(module, "integrateVerletPart2");
@@ -4383,6 +4378,7 @@ double CudaIntegrateVariableVerletStepKernel::execute(ContextImpl& context, cons
     cu.setAsCurrent();
     CudaIntegrationUtilities& integration = cu.getIntegrationUtilities();
     int numAtoms = cu.getNumAtoms();
+    int paddedNumAtoms = cu.getPaddedNumAtoms();
 
     // Select the step size to use.
 
@@ -4391,7 +4387,7 @@ double CudaIntegrateVariableVerletStepKernel::execute(ContextImpl& context, cons
     double tol = integrator.getErrorTolerance();
     float tolFloat = (float) tol;
     bool useDouble = cu.getUseDoublePrecision() || cu.getUseMixedPrecision();
-    void* argsSelect[] = {useDouble ? (void*) &maxStepSize : (void*) &maxStepSizeFloat,
+    void* argsSelect[] = {&numAtoms, &paddedNumAtoms, useDouble ? (void*) &maxStepSize : (void*) &maxStepSizeFloat,
             useDouble ? (void*) &tol : (void*) &tolFloat,
             &cu.getIntegrationUtilities().getStepSize().getDevicePointer(),
             &cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer()};
@@ -4401,7 +4397,7 @@ double CudaIntegrateVariableVerletStepKernel::execute(ContextImpl& context, cons
     // Call the first integration kernel.
 
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args1[] = {&cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
+    void* args1[] = {&numAtoms, &paddedNumAtoms, &cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
             &cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer()};
     cu.executeKernel(kernel1, args1, numAtoms);
 
@@ -4411,7 +4407,7 @@ double CudaIntegrateVariableVerletStepKernel::execute(ContextImpl& context, cons
 
     // Call the second integration kernel.
 
-    void* args2[] = {&cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
+    void* args2[] = {&numAtoms, &cu.getIntegrationUtilities().getStepSize().getDevicePointer(), &cu.getPosq().getDevicePointer(), &posCorrection,
             &cu.getVelm().getDevicePointer(), &integration.getPosDelta().getDevicePointer()};
     cu.executeKernel(kernel2, args2, numAtoms);
     integration.computeVirtualSites();
@@ -4456,8 +4452,6 @@ void CudaIntegrateVariableLangevinStepKernel::initialize(const System& system, c
     cu.setAsCurrent();
     cu.getIntegrationUtilities().initRandomNumberGenerator(integrator.getRandomNumberSeed());
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::langevin, defines, "");
     kernel1 = cu.getKernel(module, "integrateLangevinPart1");
     kernel2 = cu.getKernel(module, "integrateLangevinPart2");
@@ -4471,6 +4465,7 @@ double CudaIntegrateVariableLangevinStepKernel::execute(ContextImpl& context, co
     cu.setAsCurrent();
     CudaIntegrationUtilities& integration = cu.getIntegrationUtilities();
     int numAtoms = cu.getNumAtoms();
+    int paddedNumAtoms = cu.getPaddedNumAtoms();
 
     // Select the step size to use.
 
@@ -4483,7 +4478,7 @@ double CudaIntegrateVariableLangevinStepKernel::execute(ContextImpl& context, co
     double kT = BOLTZ*integrator.getTemperature();
     float kTFloat = (float) kT;
     bool useDouble = cu.getUseDoublePrecision() || cu.getUseMixedPrecision();
-    void* argsSelect[] = {useDouble ? (void*) &maxStepSize : (void*) &maxStepSizeFloat,
+    void* argsSelect[] = {&numAtoms, &paddedNumAtoms, useDouble ? (void*) &maxStepSize : (void*) &maxStepSizeFloat,
             useDouble ? (void*) &tol : (void*) &tolFloat,
             useDouble ? (void*) &tau : (void*) &tauFloat,
             useDouble ? (void*) &kT : (void*) &kTFloat,
@@ -4495,7 +4490,7 @@ double CudaIntegrateVariableLangevinStepKernel::execute(ContextImpl& context, co
     // Call the first integration kernel.
 
     int randomIndex = integration.prepareRandomNumbers(cu.getPaddedNumAtoms());
-    void* args1[] = {&cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer(),
+    void* args1[] = {&numAtoms, &paddedNumAtoms, &cu.getVelm().getDevicePointer(), &cu.getForce().getDevicePointer(), &integration.getPosDelta().getDevicePointer(),
             &params->getDevicePointer(), &integration.getStepSize().getDevicePointer(), &integration.getRandom().getDevicePointer(), &randomIndex};
     cu.executeKernel(kernel1, args1, numAtoms);
 
@@ -4506,7 +4501,7 @@ double CudaIntegrateVariableLangevinStepKernel::execute(ContextImpl& context, co
     // Call the second integration kernel.
 
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
-    void* args2[] = {&cu.getPosq().getDevicePointer(), &posCorrection, &integration.getPosDelta().getDevicePointer(),
+    void* args2[] = {&numAtoms, &cu.getPosq().getDevicePointer(), &posCorrection, &integration.getPosDelta().getDevicePointer(),
             &cu.getVelm().getDevicePointer(), &integration.getStepSize().getDevicePointer()};
     cu.executeKernel(kernel2, args2, numAtoms);
     integration.computeVirtualSites();
@@ -4752,22 +4747,6 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
         defines["SUM_BUFFER_SIZE"] = "0";
         defines["SUM_OUTPUT_INDEX"] = "0";
         
-        // Initialize the random number generator.
-        
-        uniformRandoms = CudaArray::create<float4>(cu, cu.getNumAtoms(), "uniformRandoms");
-        randomSeed = CudaArray::create<int4>(cu, cu.getNumThreadBlocks()*CudaContext::ThreadBlockSize, "randomSeed");
-        vector<int4> seed(randomSeed->getSize());
-        unsigned int r = integrator.getRandomNumberSeed()+1;
-        for (int i = 0; i < randomSeed->getSize(); i++) {
-            seed[i].x = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
-            seed[i].y = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
-            seed[i].z = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
-            seed[i].w = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
-        }
-        randomSeed->upload(seed);
-        CUmodule randomProgram = cu.createModule(CudaKernelSources::customIntegrator, defines);
-        randomKernel = cu.getKernel(randomProgram, "generateRandomNumbers");
-        
         // Build a list of all variables that affect the forces, so we can tell which
         // steps invalidate them.
         
@@ -4858,10 +4837,10 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
         for (int step = 1; step < numSteps; step++) {
             if (needsForces[step] || needsEnergy[step])
                 continue;
-            if (stepType[step-1] == CustomIntegrator::ComputeGlobal && stepType[step] == CustomIntegrator::ComputeGlobal)
+            if (stepType[step-1] == CustomIntegrator::ComputeGlobal && stepType[step] == CustomIntegrator::ComputeGlobal &&
+                    !usesVariable(expression[step], "uniform") && !usesVariable(expression[step], "gaussian"))
                 merged[step] = true;
-            if (stepType[step-1] == CustomIntegrator::ComputePerDof && stepType[step] == CustomIntegrator::ComputePerDof &&
-                    !usesVariable(expression[step], "uniform"))
+            if (stepType[step-1] == CustomIntegrator::ComputePerDof && stepType[step] == CustomIntegrator::ComputePerDof)
                 merged[step] = true;
         }
         
@@ -4880,7 +4859,13 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
                 }
                 int numGaussian = 0, numUniform = 0;
                 for (int j = step; j < numSteps && (j == step || merged[j]); j++) {
+                    numGaussian += numAtoms*usesVariable(expression[j], "gaussian");
+                    numUniform += numAtoms*usesVariable(expression[j], "uniform");
                     compute << "{\n";
+                    if (numGaussian > 0)
+                        compute << "float4 gaussian = gaussianValues[gaussianIndex+index];\n";
+                    if (numUniform > 0)
+                        compute << "float4 uniform = uniformValues[uniformIndex+index];\n";
                     for (int i = 0; i < 3; i++)
                         compute << createPerDofComputation(stepType[j] == CustomIntegrator::ComputePerDof ? variable[j] : "", expression[j], i, integrator, forceName[j], energyName[j]);
                     if (variable[j] == "x") {
@@ -4899,9 +4884,11 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
                             compute << "perDofValues"<<cu.intToString(i+1)<<"[3*index+2] = perDofz"<<cu.intToString(i+1)<<";\n";
                         }
                     }
+                    if (numGaussian > 0)
+                        compute << "gaussianIndex += NUM_ATOMS;\n";
+                    if (numUniform > 0)
+                        compute << "uniformIndex += NUM_ATOMS;\n";
                     compute << "}\n";
-                    numGaussian += numAtoms*usesVariable(expression[j], "gaussian");
-                    numUniform += numAtoms*usesVariable(expression[j], "uniform");
                 }
                 map<string, string> replacements;
                 replacements["COMPUTE_STEP"] = compute.str();
@@ -4931,9 +4918,9 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
                 args1.push_back(&globalValues->getDevicePointer());
                 args1.push_back(&contextParameterValues->getDevicePointer());
                 args1.push_back(&sumBuffer->getDevicePointer());
-                args1.push_back(&integration.getRandom().getDevicePointer());
                 args1.push_back(NULL);
-                args1.push_back(&uniformRandoms->getDevicePointer());
+                args1.push_back(NULL);
+                args1.push_back(NULL);
                 args1.push_back(&potentialEnergy->getDevicePointer());
                 for (int i = 0; i < (int) perDofValues->getBuffers().size(); i++)
                     args1.push_back(&perDofValues->getBuffers()[i].getMemory());
@@ -5000,6 +4987,25 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
             }
         }
         
+        // Initialize the random number generator.
+        
+        int maxUniformRandoms = 1;
+        for (int i = 0; i < (int) requiredUniform.size(); i++)
+            maxUniformRandoms = max(maxUniformRandoms, requiredUniform[i]);
+        uniformRandoms = CudaArray::create<float4>(cu, maxUniformRandoms, "uniformRandoms");
+        randomSeed = CudaArray::create<int4>(cu, cu.getNumThreadBlocks()*CudaContext::ThreadBlockSize, "randomSeed");
+        vector<int4> seed(randomSeed->getSize());
+        unsigned int r = integrator.getRandomNumberSeed()+1;
+        for (int i = 0; i < randomSeed->getSize(); i++) {
+            seed[i].x = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
+            seed[i].y = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
+            seed[i].z = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
+            seed[i].w = r = (1664525*r + 1013904223) & 0xFFFFFFFF;
+        }
+        randomSeed->upload(seed);
+        CUmodule randomProgram = cu.createModule(CudaKernelSources::customIntegrator, defines);
+        randomKernel = cu.getKernel(randomProgram, "generateRandomNumbers");
+        
         // Create the kernel for summing the potential energy.
 
         defines["SUM_OUTPUT_INDEX"] = "0";
@@ -5042,7 +5048,7 @@ void CudaIntegrateCustomStepKernel::prepareForComputation(ContextImpl& context, 
         kineticEnergyArgs.push_back(&globalValues->getDevicePointer());
         kineticEnergyArgs.push_back(&contextParameterValues->getDevicePointer());
         kineticEnergyArgs.push_back(&sumBuffer->getDevicePointer());
-        kineticEnergyArgs.push_back(&integration.getRandom().getDevicePointer());
+        kineticEnergyArgs.push_back(NULL);
         kineticEnergyArgs.push_back(NULL);
         kineticEnergyArgs.push_back(&uniformRandoms->getDevicePointer());
         kineticEnergyArgs.push_back(&potentialEnergy->getDevicePointer());
@@ -5112,7 +5118,8 @@ void CudaIntegrateCustomStepKernel::execute(ContextImpl& context, CustomIntegrat
 
     // Loop over computation steps in the integrator and execute them.
 
-    void* randomArgs[] = {&uniformRandoms->getDevicePointer(), &randomSeed->getDevicePointer()};
+    int maxUniformRandoms = uniformRandoms->getSize();
+    void* randomArgs[] = {&maxUniformRandoms, &uniformRandoms->getDevicePointer(), &randomSeed->getDevicePointer()};
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
     for (int i = 0; i < numSteps; i++) {
         int lastForceGroups = context.getLastForceGroups();
@@ -5161,7 +5168,9 @@ void CudaIntegrateCustomStepKernel::execute(ContextImpl& context, CustomIntegrat
         if (stepType[i] == CustomIntegrator::ComputePerDof && !merged[i]) {
             int randomIndex = integration.prepareRandomNumbers(requiredGaussian[i]);
             kernelArgs[i][0][1] = &posCorrection;
+            kernelArgs[i][0][9] = &integration.getRandom().getDevicePointer();
             kernelArgs[i][0][10] = &randomIndex;
+            kernelArgs[i][0][11] = &uniformRandoms->getDevicePointer();
             if (requiredUniform[i] > 0)
                 cu.executeKernel(randomKernel, &randomArgs[0], numAtoms);
             cu.executeKernel(kernels[i][0], &kernelArgs[i][0][0], numAtoms);
@@ -5176,7 +5185,9 @@ void CudaIntegrateCustomStepKernel::execute(ContextImpl& context, CustomIntegrat
         else if (stepType[i] == CustomIntegrator::ComputeSum) {
             int randomIndex = integration.prepareRandomNumbers(requiredGaussian[i]);
             kernelArgs[i][0][1] = &posCorrection;
+            kernelArgs[i][0][9] = &integration.getRandom().getDevicePointer();
             kernelArgs[i][0][10] = &randomIndex;
+            kernelArgs[i][0][11] = &uniformRandoms->getDevicePointer();
             if (requiredUniform[i] > 0)
                 cu.executeKernel(randomKernel, &randomArgs[0], numAtoms);
             cu.clearBuffer(*sumBuffer);
@@ -5206,6 +5217,10 @@ void CudaIntegrateCustomStepKernel::execute(ContextImpl& context, CustomIntegrat
     cu.setTime(cu.getTime()+integrator.getStepSize());
     cu.setStepCount(cu.getStepCount()+1);
     cu.reorderAtoms();
+    if (cu.getAtomsWereReordered()) {
+        forcesAreValid = false;
+        validSavedForces.clear();
+    }
 }
 
 double CudaIntegrateCustomStepKernel::computeKineticEnergy(ContextImpl& context, CustomIntegrator& integrator, bool& forcesAreValid) {
@@ -5227,6 +5242,7 @@ double CudaIntegrateCustomStepKernel::computeKineticEnergy(ContextImpl& context,
     CUdeviceptr posCorrection = (cu.getUseMixedPrecision() ? cu.getPosqCorrection().getDevicePointer() : 0);
     int randomIndex = 0;
     kineticEnergyArgs[1] = &posCorrection;
+    kineticEnergyArgs[9] = &cu.getIntegrationUtilities().getRandom().getDevicePointer();
     kineticEnergyArgs[10] = &randomIndex;
     cu.clearBuffer(*sumBuffer);
     cu.executeKernel(kineticEnergyKernel, &kineticEnergyArgs[0], cu.getNumAtoms());
@@ -5348,7 +5364,6 @@ void CudaApplyAndersenThermostatKernel::initialize(const System& system, const A
     cu.setAsCurrent();
     randomSeed = thermostat.getRandomNumberSeed();
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
     CUmodule module = cu.createModule(CudaKernelSources::andersenThermostat, defines);
     kernel = cu.getKernel(module, "applyAndersenThermostat");
     cu.getIntegrationUtilities().initRandomNumberGenerator(randomSeed);
@@ -5370,7 +5385,8 @@ void CudaApplyAndersenThermostatKernel::execute(ContextImpl& context) {
     float frequency = (float) context.getParameter(AndersenThermostat::CollisionFrequency());
     float kT = (float) (BOLTZ*context.getParameter(AndersenThermostat::Temperature()));
     int randomIndex = cu.getIntegrationUtilities().prepareRandomNumbers(cu.getPaddedNumAtoms());
-    void* args[] = {&frequency, &kT, &cu.getVelm().getDevicePointer(), &cu.getIntegrationUtilities().getStepSize().getDevicePointer(),
+    int numAtoms = cu.getNumAtoms();
+    void* args[] = {&numAtoms, &frequency, &kT, &cu.getVelm().getDevicePointer(), &cu.getIntegrationUtilities().getStepSize().getDevicePointer(),
             &cu.getIntegrationUtilities().getRandom().getDevicePointer(), &randomIndex, &atomGroups->getDevicePointer()};
     cu.executeKernel(kernel, args, cu.getNumAtoms());
 }
@@ -5385,14 +5401,14 @@ CudaApplyMonteCarloBarostatKernel::~CudaApplyMonteCarloBarostatKernel() {
         delete moleculeStartIndex;
 }
 
-void CudaApplyMonteCarloBarostatKernel::initialize(const System& system, const MonteCarloBarostat& thermostat) {
+void CudaApplyMonteCarloBarostatKernel::initialize(const System& system, const Force& thermostat) {
     cu.setAsCurrent();
     savedPositions = new CudaArray(cu, cu.getPaddedNumAtoms(), cu.getUseDoublePrecision() ? sizeof(double4) : sizeof(float4), "savedPositions");
     CUmodule module = cu.createModule(CudaKernelSources::monteCarloBarostat);
     kernel = cu.getKernel(module, "scalePositions");
 }
 
-void CudaApplyMonteCarloBarostatKernel::scaleCoordinates(ContextImpl& context, double scale) {
+void CudaApplyMonteCarloBarostatKernel::scaleCoordinates(ContextImpl& context, double scaleX, double scaleY, double scaleZ) {
     cu.setAsCurrent();
     if (!hasInitializedKernels) {
         hasInitializedKernels = true;
@@ -5425,9 +5441,11 @@ void CudaApplyMonteCarloBarostatKernel::scaleCoordinates(ContextImpl& context, d
         m<<"Error saving positions for MC barostat: "<<cu.getErrorString(result)<<" ("<<result<<")";
         throw OpenMMException(m.str());
     }        
-    float scalef = (float) scale;
-    void* args[] = {&scalef, &numMolecules, cu.getPeriodicBoxSizePointer(), cu.getInvPeriodicBoxSizePointer(),
-            &cu.getPosq().getDevicePointer(), &moleculeAtoms->getDevicePointer(), &moleculeStartIndex->getDevicePointer()};
+    float scalefX = (float) scaleX;
+    float scalefY = (float) scaleY;
+    float scalefZ = (float) scaleZ;
+    void* args[] = {&scalefX, &scalefY, &scalefZ, &numMolecules, cu.getPeriodicBoxSizePointer(), cu.getInvPeriodicBoxSizePointer(), 
+		    &cu.getPosq().getDevicePointer(), &moleculeAtoms->getDevicePointer(), &moleculeStartIndex->getDevicePointer()};
     cu.executeKernel(kernel, args, cu.getNumAtoms());
     for (int i = 0; i < (int) cu.getPosCellOffsets().size(); i++)
         cu.getPosCellOffsets()[i] = make_int4(0, 0, 0, 0);

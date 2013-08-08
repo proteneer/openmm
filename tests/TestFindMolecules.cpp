@@ -6,7 +6,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2012 Stanford University and the Authors.           *
+ * Portions copyright (c) 2013 Stanford University and the Authors.           *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -29,23 +29,53 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.                                     *
  * -------------------------------------------------------------------------- */
 
-#ifndef __ReferenceVirtualSites_H__
-#define __ReferenceVirtualSites_H__
-
+#include "openmm/internal/AssertionUtilities.h"
+#include "openmm/Context.h"
+#include "openmm/internal/ContextImpl.h"
+#include "openmm/HarmonicBondForce.h"
+#include "openmm/Platform.h"
 #include "openmm/System.h"
-#include "../SimTKUtilities/RealVec.h"
+#include "openmm/VerletIntegrator.h"
+#include <iostream>
 #include <vector>
 
-class OPENMM_EXPORT ReferenceVirtualSites {
-public:
-    /**
-     * Compute the positions of all virtual sites.
-     */
-    static void computePositions(const OpenMM::System& system, std::vector<OpenMM::RealVec>& atomCoordinates);
-    /**
-     * Distribute forces from virtual sites to the atoms they are based on.
-     */
-    static void distributeForces(const OpenMM::System& system, const std::vector<OpenMM::RealVec>& atomCoordinates, std::vector<OpenMM::RealVec>& forces);
-};
+using namespace OpenMM;
+using namespace std;
 
-#endif // __ReferenceVirtualSites_H__
+void testFindMolecules() {
+    const int numMolecules = 5;
+    const int moleculeSize[] = {1, 10, 100, 1000, 10000};
+    vector<int> particleMolecule;
+    System system;
+    HarmonicBondForce* bonds = new HarmonicBondForce();
+    system.addForce(bonds);
+    for (int i = 0; i < numMolecules; i++)
+        for (int j = 0; j < moleculeSize[i]; j++) {
+            int index = system.addParticle(1.0);
+            particleMolecule.push_back(i);
+            if (j > 0)
+                bonds->addBond(index, index-1, 1.0, 1.0);
+        }
+    VerletIntegrator integrator(1.0);
+    Context context(system, integrator, Platform::getPlatformByName("Reference"));
+    ContextImpl* contextImpl = *reinterpret_cast<ContextImpl**>(&context);
+    const vector<vector<int> >& molecules = contextImpl->getMolecules();
+    ASSERT_EQUAL(numMolecules, molecules.size());
+    for (int i = 0; i < numMolecules; i++) {
+        ASSERT_EQUAL(moleculeSize[i], molecules[i].size());
+        for (int j = 0; j < moleculeSize[i]; j++)
+            ASSERT_EQUAL(particleMolecule[molecules[i][j]], i);
+    }
+}
+
+int main() {
+    try {
+        testFindMolecules();
+    }
+    catch(const exception& e) {
+        cout << "exception: " << e.what() << endl;
+        return 1;
+    }
+    cout << "Done" << endl;
+    return 0;
+}

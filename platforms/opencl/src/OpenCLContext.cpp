@@ -6,7 +6,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2009-2012 Stanford University and the Authors.      *
+ * Portions copyright (c) 2009-2013 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -39,6 +39,7 @@
 #include "openmm/Platform.h"
 #include "openmm/System.h"
 #include "openmm/VirtualSite.h"
+#include "openmm/internal/ContextImpl.h"
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -97,7 +98,6 @@ OpenCLContext::OpenCLContext(const System& system, int platformIndex, int device
             // Try to figure out which device is the fastest.
 
             int bestSpeed = -1;
-            bool bestSupportsDouble = false;
             for (int i = 0; i < (int) devices.size(); i++) {
                 if (platformVendor == "Apple" && devices[i].getInfo<CL_DEVICE_VENDOR>() == "AMD")
                     continue; // Don't use AMD GPUs on OS X due to serious bugs.
@@ -136,11 +136,9 @@ OpenCLContext::OpenCLContext(const System& system, int platformIndex, int device
                     }
                 }
                 int speed = devices[i].getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>()*processingElementsPerComputeUnit*devices[i].getInfo<CL_DEVICE_MAX_CLOCK_FREQUENCY>();
-                bool supportsDouble = (devices[i].getInfo<CL_DEVICE_EXTENSIONS>().find("cl_khr_fp64") != string::npos);
-                if (maxSize >= minThreadBlockSize && speed > bestSpeed && (supportsDouble || !bestSupportsDouble)) {
+                if (maxSize >= minThreadBlockSize && speed > bestSpeed) {
                     deviceIndex = i;
                     bestSpeed = speed;
-                    bestSupportsDouble = supportsDouble;
                 }
             }
         }
@@ -277,7 +275,8 @@ OpenCLContext::OpenCLContext(const System& system, int platformIndex, int device
     clearFiveBuffersKernel = cl::Kernel(utilities, "clearFiveBuffers");
     clearSixBuffersKernel = cl::Kernel(utilities, "clearSixBuffers");
     reduceReal4Kernel = cl::Kernel(utilities, "reduceReal4Buffer");
-    reduceForcesKernel = cl::Kernel(utilities, "reduceForces");
+    if (supports64BitGlobalAtomics)
+        reduceForcesKernel = cl::Kernel(utilities, "reduceForces");
 
     // Decide whether native_sqrt(), native_rsqrt(), and native_recip() are sufficiently accurate to use.
 
@@ -620,15 +619,6 @@ void OpenCLContext::reduceBuffer(OpenCLArray& array, int numBuffers) {
     executeKernel(reduceReal4Kernel, bufferSize, 128);
 }
 
-void OpenCLContext::tagAtomsInMolecule(int atom, int molecule, vector<int>& atomMolecule, vector<vector<int> >& atomBonds) {
-    // Recursively tag atoms as belonging to a particular molecule.
-
-    atomMolecule[atom] = molecule;
-    for (int i = 0; i < (int) atomBonds[atom].size(); i++)
-        if (atomMolecule[atomBonds[atom][i]] == -1)
-            tagAtomsInMolecule(atomBonds[atom][i], molecule, atomMolecule, atomBonds);
-}
-
 /**
  * This class ensures that atom reordering doesn't break virtual sites.
  */
@@ -724,16 +714,14 @@ void OpenCLContext::findMoleculeGroups() {
             }
         }
 
-        // Now tag atoms by which molecule they belong to.
+        // Now identify atoms by which molecule they belong to.
 
-        vector<int> atomMolecule(numAtoms, -1);
-        int numMolecules = 0;
-        for (int i = 0; i < numAtoms; i++)
-            if (atomMolecule[i] == -1)
-                tagAtomsInMolecule(i, numMolecules++, atomMolecule, atomBonds);
-        vector<vector<int> > atomIndices(numMolecules);
-        for (int i = 0; i < numAtoms; i++)
-            atomIndices[atomMolecule[i]].push_back(i);
+        vector<vector<int> > atomIndices = ContextImpl::findMolecules(numAtoms, atomBonds);
+        int numMolecules = atomIndices.size();
+        vector<int> atomMolecule(numAtoms);
+        for (int i = 0; i < (int) atomIndices.size(); i++)
+            for (int j = 0; j < (int) atomIndices[i].size(); j++)
+                atomMolecule[atomIndices[i][j]] = i;
 
         // Construct a description of each molecule.
 

@@ -64,6 +64,14 @@ using namespace OpenMM;
 
 %include OpenMM_headers.i
 
+%pythoncode %{
+  # when we import * from the python module, we only want to import the
+  # actual classes, and not the swigregistration methods, which have already
+  # been called, and are now unneeded by the user code, and only pollute the
+  # namespace
+  __all__ = [k for k in locals().keys() if not (k.endswith('_swigregister') or k.startswith('_'))]
+%}
+
 /*
 %extend OpenMM::XmlSerializer {
     %template(XmlSerializer_serialize_AndersenThermostat) XmlSerializer::serialize<AndersenThermostat>;
@@ -82,6 +90,7 @@ using namespace OpenMM;
     %template(XmlSerializer_serialize_HarmonicAngleForce) XmlSerializer::serialize<HarmonicAngleForce>;
     %template(XmlSerializer_serialize_HarmonicBondForce) XmlSerializer::serialize<HarmonicBondForce>;
     %template(XmlSerializer_serialize_MonteCarloBarostat) XmlSerializer::serialize<MonteCarloBarostat>;
+    %template(XmlSerializer_serialize_MonteCarloAnisotropicBarostat) XmlSerializer::serialize<MonteCarloAnisotropicBarostat>;
     %template(XmlSerializer_serialize_NonbondedForce) XmlSerializer::serialize<NonbondedForce>;
     %template(XmlSerializer_serialize_RBTorsionForce) XmlSerializer::serialize<RBTorsionForce>;
     %template(XmlSerializer_serialize_System) XmlSerializer::serialize<System>;
@@ -102,6 +111,7 @@ using namespace OpenMM;
     %template(XmlSerializer_deserialize_HarmonicAngleForce) XmlSerializer::deserialize<HarmonicAngleForce>;
     %template(XmlSerializer_deserialize_HarmonicBondForce) XmlSerializer::deserialize<HarmonicBondForce>;
     %template(XmlSerializer_deserialize_MonteCarloBarostat) XmlSerializer::deserialize<MonteCarloBarostat>;
+    %template(XmlSerializer_deserialize_MonteCarloAnisotropicBarostat) XmlSerializer::deserialize<MonteCarloAnisotropicBarostat>;
     %template(XmlSerializer_deserialize_NonbondedForce) XmlSerializer::deserialize<NonbondedForce>;
     %template(XmlSerializer_deserialize_RBTorsionForce) XmlSerializer::deserialize<RBTorsionForce>;
     %template(XmlSerializer_deserialize_System) XmlSerializer::deserialize<System>;

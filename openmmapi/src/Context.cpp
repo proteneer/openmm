@@ -33,7 +33,7 @@
 #include "openmm/internal/ContextImpl.h"
 #include "openmm/OpenMMException.h"
 #include "openmm/internal/ForceImpl.h"
-#include "../src/SimTKUtilities/SimTKOpenMMRealType.h"
+#include "SimTKOpenMMRealType.h"
 #include "sfmt/SFMT.h"
 #include <cmath>
 
@@ -53,7 +53,7 @@ Context::Context(const System& system, Integrator& integrator, Platform& platfor
 }
 
 Context::~Context() {
-	delete impl;
+    delete impl;
 }
 
 const System& Context::getSystem() const {
