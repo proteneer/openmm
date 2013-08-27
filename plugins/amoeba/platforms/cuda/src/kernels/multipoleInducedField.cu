@@ -10,6 +10,31 @@ typedef struct {
     float thole, damp;
 } AtomData;
 
+
+
+//support for 64 bit shuffles
+static __inline__ __device__ float real_shfl(float var, int srcLane) {
+    return __shfl(var, srcLane);
+}
+
+static __inline__ __device__ double real_shfl(double var, int srcLane) {
+    int hi, lo;
+    asm volatile("mov.b64 { %0, %1 }, %2;" : "=r"(lo), "=r"(hi) : "d"(var));
+    hi = __shfl(hi, srcLane);
+    lo = __shfl(lo, srcLane);
+    return __hiloint2double( hi, lo );
+}
+
+static __inline__ __device__ long long real_shfl(long long var, int srcLane) {
+    int hi, lo;
+    asm volatile("mov.b64 { %0, %1 }, %2;" : "=r"(lo), "=r"(hi) : "l"(var));
+    hi = __shfl(hi, srcLane);
+    lo = __shfl(lo, srcLane);
+    // unforunately there isn't an __nv_hiloint2long(hi,lo) intrinsic cast
+    int2 fuse; fuse.x = lo; fuse.y = hi;
+    return *reinterpret_cast<long long*>(&fuse);
+}
+
 #ifdef USE_GK
 inline __device__ void loadAtomData(AtomData& data, int atom, const real4* __restrict__ posq, const real* __restrict__ inducedDipole,
         const real* __restrict__ inducedDipolePolar, const float2* __restrict__ dampingAndThole, const real* __restrict__ inducedDipoleS,
@@ -197,6 +222,285 @@ __device__ void computeOneInteraction(AtomData& atom1, AtomData& atom2, real3 de
 
 }
 #endif
+
+/**
+ * Build a preconditioner used in conjugate gradient
+ * 
+ * Construct a new neighborlist with a smaller cutoff distance than the cutoff used in the nonbonded neighborlist. The output is a tensorlist where each
+ * interaction is represented by a real6 tensor (minv0 to minv5).
+ 
+ */
+
+/**
+ * Initialize conjugate gradient
+ * 
+ * 1) Compute new direct dipoles from direct field
+ * 2) Set induced dipoles equal to direct dipoles
+ * K> Compute a new induced field based on induced dipoles
+ */
+
+extern "C" __global__ void initializeInducedDipoles() {
+
+}
+
+
+/*
+* Initialize rsd and rsdp using induced field, direct dipoles, and induced dipoles. 
+* rsd, rsdp, zrsd, zrsdp are store in dimension major format:
+* rsd[0*PADDED_NUM_ATOMS+i] for x coordinates in atom i
+* rsd[1*PADDED_NUM_ATOMS+i] for y coordinates in atom i
+* this ensures nicely coalesced memory access patterns
+*/ 
+extern "C" __global__ void initializeCG(real* __restrict__ rsd, real* __restrict__ rsdp, 
+    real* __restrict__zrsd, real3* __restrict__ zrsdp, const float* __restrict__ polarizability,
+    const real* __restrict__ inducedDipole, const real* __restrict__ inducedDipolePolar,
+    const real* __restrict__ directDipole, const real* __restrict__ directDipolePolar,
+    unsigned long long* __restrict__ inducedField, unsigned long long* __restrict__ inducedFieldPolar) {
+    const float udiag = 2.0f;
+    for(int i = threadIdx.x; i < NUM_ATOMS; i += blockDim.x) { 
+            real rsdx, rsdy, rsdz, rsdpx, rsdpy, rsdpz;
+            // inducedField is stored in dimension major format
+            // directDipole and inducedDipole are stored in atom major format
+            rsdx = (directDipole[i*3+0] - inducedDipole[i*3+0])/polarizability[i] + inducedField[0*PADDED_NUM_ATOMS+i]/0x100000000;
+            rsdy = (directDipole[i*3+1] - inducedDipole[i*3+1])/polarizability[i] + inducedField[1*PADDED_NUM_ATOMS+i]/0x100000000;
+            rsdz = (directDipole[i*3+2] - inducedDipole[i*3+2])/polarizability[i] + inducedField[2*PADDED_NUM_ATOMS+i]/0x100000000;
+            rsdpx = (directDipolePolar[i*3+0] - inducedDipolePolar[i*3+0])/polarizability[i] + inducedFieldPolar[0*PADDED_NUM_ATOMS+i]/0x100000000;
+            rsdpy = (directDipolePolar[i*3+1] - inducedDipolePolar[i*3+1])/polarizability[i] + inducedFieldPolar[1*PADDED_NUM_ATOMS+i]/0x100000000;
+            rsdpz = (directDipolePolar[i*3+2] - inducedDipolePolar[i*3+2])/polarizability[i] + inducedFieldPolar[2*PADDED_NUM_ATOMS+i]/0x100000000;
+
+            rsd[0*PADDED_NUM_ATOMS+i] = rsdx;
+            rsd[1*PADDED_NUM_ATOMS+i] = rsdy;
+            rsd[2*PADDED_NUM_ATOMS+i] = rsdz;
+            rsdp[0*PADDED_NUM_ATOMS+i] = rsdx;
+            rsdp[1*PADDED_NUM_ATOMS+i] = rsdy;
+            rsdp[2*PADDED_NUM_ATOMS+i] = rsdz;
+
+            zrsd[0*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdx;
+            zrsd[1*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdy;
+            zrsd[2*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdz;
+            zrsdp[0*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpx;
+            zrsdp[1*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpy;
+            zrsdp[2*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpz;
+    }
+}
+
+// We use the neighborlist constructed by findInteractingBlocks to apply the pre-conditioner on residuals
+// Three types of interactions:
+// 1) On diagonal tiles
+// --horizontal accumulation
+// 2) Neighborlist tiles
+// --staggered accumulation
+extern "C" __global__ void applyPreconditioner(
+    unsigned int numTileIndices, const int* __restrict__ interactingTiles, const unsigned int* __restrict__ interactingAtoms, 
+    //const tileflags* __restrict__ exclusions, const ushort2* __restrict__ exclusionTiles,
+    const float* __restrict__ polarizability, const float2* __restrict__ dampingAndThole,
+    const real4* posq, real4 periodicBoxSize, real4 invPeriodicBoxSize,
+    const real* __restrict__ rsd, const real* __restrict__ rsdp,
+    real* __restrict__ zrsd, real* __restrict__ zrsdp) {
+
+    // initialize new residuals to zero
+    for(unsigned int gid = threadIdx.x+blockDim.x*blockIdx.x; gid < PADDED_NUM_ATOMS; gid += blockDim.x*gridDim.x) {
+        zrsd[gid] = 0;
+        zrsdp[gid] = 0;
+    }
+
+    const unsigned int totalWarps = (blockDim.x*gridDim.x)/TILE_SIZE;
+    const unsigned int warp = (blockIdx.x*blockDim.x+threadIdx.x)/TILE_SIZE; // global warpIndex
+    const unsigned int tgx = threadIdx.x & (TILE_SIZE-1); // index within the warp
+    const unsigned int tbx = threadIdx.x - tgx;           // block warpIndex
+
+    // used shared memory if the device cannot shuffle
+    
+    const real udiag = 2.0;
+    
+    // first look
+    const unsigned int lastWarp = (NUM_ATOMS+TILE_SIZE-1)/TILE_SIZE;
+
+    // first loop: diagonal tiles
+    for(int pos = warp; pos < lastWarp; pos += totalWarps) {
+        // suppose shuffles are available
+        const unsigned int atom1 = pos*TILE_SIZE + tgx;
+
+        // shuffled
+        real3 posq1 = trimTo3(posq[atom1]);
+
+        real3 rsd1, rsdp1;
+        rsd1.x = rsd[0*PADDED_NUM_ATOMS+atom1];
+        rsd1.y = rsd[1*PADDED_NUM_ATOMS+atom1];
+        rsd1.z = rsd[2*PADDED_NUM_ATOMS+atom1];
+        rsdp1.x = rsdp[0*PADDED_NUM_ATOMS+atom1];
+        rsdp1.y = rsdp[1*PADDED_NUM_ATOMS+atom1];
+        rsdp1.z = rsdp[2*PADDED_NUM_ATOMS+atom1];
+        
+        // used for accumulation
+        real3 zrsd1, zrsdp1;
+
+        zrsd1 = make_real3(0, 0, 0);
+        zrsdp1 = make_real3(0, 0, 0);
+
+        const float pdi1 = dampingAndThole[atom1].x;
+        const float pti1 = dampingAndThole[atom1].y;
+        const float poli1 = polarizability[atom1];
+
+        for(unsigned int j=0; (j < TILE_SIZE) && (pos + j < NUM_ATOMS) ; j++) {
+            const unsigned int atom2 = pos+j;
+
+            // all threads in a warp must partake in broadcast shuffle
+            real3 posq2;
+            posq2.x = real_shfl(posq1.x, j);
+            posq2.y = real_shfl(posq1.y, j);
+            posq2.z = real_shfl(posq1.z, j);
+            real3 rsd2, rsdp2;
+            rsd2.x = real_shfl(rsd1.x, j);
+            rsd2.y = real_shfl(rsd1.y, j);
+            rsd2.z = real_shfl(rsd1.z, j);
+
+            const float pdi2 = real_shfl(pdi1, j);
+            const float pti2 = real_shfl(pti1, j);
+            const float poli2 = real_shfl(poli1, j);
+            
+            // do a check after shuffling to see if atom1 < NUM_ATOMS && atom2 < NUM_ATOMS
+
+            const real xr = posq1.x - posq2.x;
+            const real yr = posq1.y - posq2.y;
+            const real zr = posq1.z - posq2.z;
+            const real r2 = xr*xr + yr*yr + zr*zr;
+
+            if(atom1 == atom2) {
+                zrsd1.x += udiag * polarizability[i] * rsd[i].x;
+                zrsd1.y += udiag * polarizability[i] * rsd[i].y;
+                zrsd1.z += udiag * polarizability[i] * rsd[i].z;
+            } else if(r2 < CUTOFF2_SQUARED) {
+                // load parameters for CG
+                const real r = SQRT(r2);
+                const real scale3 = 1.0;
+                const real scale5 = 1.0;
+                const real damp = pdi1*pdi2;
+                if(damp != 0) {
+                    const real pgamma = min(pti1, pti2);
+                    damp = -pgamma*pow((r/damp),3);
+                    if(damp > -50.0) { // not really needed
+                        const real expdamp = exp(damp);
+                        scale3 = scale3 * (1.0-expdamp);
+                        scale5 = scale5 * (1.0-expdamp*(1.0-expdamp));
+                    }
+                }
+                const real polik = poli1*poli2;
+                const real rr3 = scale3*polik/(r*r2);
+                const real rr5 = 3.0f*scale5*polik/(r*r2*r2);
+      
+                // load minv
+                real m0,m1,m2,m3,m4,m5;
+                const real m0 = rr5*xr*xr-rr3;
+                const real m1 = rr5*xr*yr;
+                const real m2 = rr5*xr*zr;
+                const real m3 = rr5*yr*yr-rr3;
+                const real m4 = rr5*yr*zr;
+                const real m5 = rr5*zr*zr-rr3;
+              
+                zrsd1.x += m0*rsd2.x+m1*rsd2.y+m2*rsd2.z;
+                zrsd1.y += m1*rsd2.x+m3*rsd2.y+m4*rsd2.z;
+                zrsd1.z += m2*rsd2.x+m4*rsd2.y+m5*rsd2.z;
+                zrsdp1.x += m0*rsdp2.x+m1*rsdp2.y+m2*rsdp2.z;
+                zrsdp1.y += m1*rsdp2.x+m3*rsdp2.y+m4*rsdp2.z;
+                zrsdp1.z += m2*rsdp2.x+m4*rsdp2.y+m5*rsdp2.z;
+            }
+        }
+        if(atom1 < NUM_ATOMS) {
+            atomicAdd(&zrsd[0*PADDED_NUM_ATOMS+atom1], zrsd1.x);
+            atomicAdd(&zrsd[1*PADDED_NUM_ATOMS+atom1], zrsd1.y);
+            atomicAdd(&zrsd[2*PADDED_NUM_ATOMS+atom1], zrsd1.z);
+            atomicAdd(&zrsdp[0*PADDED_NUM_ATOMS+atom1], zrsdp1.x);
+            atomicAdd(&zrsdp[1*PADDED_NUM_ATOMS+atom1], zrsdp1.y);
+            atomicAdd(&zrsdp[2*PADDED_NUM_ATOMS+atom1], zrsdp1.z);
+        }
+    }
+
+    // second loop: neighborlist tiles
+
+    for (int pos = firstExclusionTile; pos < lastExclusionTile; pos++) {
+        const ushort2 tileIndices = exclusionTiles[pos];
+        const unsigned int x = tileIndices.x;
+        const unsigned int y = tileIndices.y;
+        real3 force = make_real3(0);
+        unsigned int atom1 = x*TILE_SIZE + tgx;
+        real4 posq1 = posq[atom1];
+        LOAD_ATOM1_PARAMETERS
+#ifdef USE_EXCLUSIONS
+        tileflags excl = exclusions[pos*TILE_SIZE+tgx];
+#endif
+        const bool hasExclusions = true;
+        if (x == y) {
+            // This tile is on the diagonal.
+#ifdef ENABLE_SHUFFLE
+            real4 shflPosq = posq1;
+#else
+            localData[threadIdx.x].x = posq1.x;
+            localData[threadIdx.x].y = posq1.y;
+            localData[threadIdx.x].z = posq1.z;
+            localData[threadIdx.x].q = posq1.w;
+            LOAD_LOCAL_PARAMETERS_FROM_1
+#endif
+
+            // we do not need to fetch parameters from global since this is a symmetric tile
+            // instead we can broadcast the values using shuffle
+            for (unsigned int j = 0; j < TILE_SIZE; j++) {
+                int atom2 = tbx+j;
+                real4 posq2;
+#ifdef ENABLE_SHUFFLE
+                BROADCAST_WARP_DATA
+#else   
+                posq2 = make_real4(localData[atom2].x, localData[atom2].y, localData[atom2].z, localData[atom2].q);
+#endif
+                real3 delta = make_real3(posq2.x-posq1.x, posq2.y-posq1.y, posq2.z-posq1.z);
+#ifdef USE_PERIODIC
+                delta.x -= floor(delta.x*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
+                delta.y -= floor(delta.y*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
+                delta.z -= floor(delta.z*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
+                real r2 = delta.x*delta.x + delta.y*delta.y + delta.z*delta.z;
+                real invR = RSQRT(r2);
+                real r = RECIP(invR);
+                LOAD_ATOM2_PARAMETERS
+                atom2 = y*TILE_SIZE+j;
+#ifdef USE_SYMMETRIC
+                real dEdR = 0.0f;
+#else
+                real3 dEdR1 = make_real3(0);
+                real3 dEdR2 = make_real3(0);
+#endif
+#ifdef USE_EXCLUSIONS
+                bool isExcluded = (atom1 >= NUM_ATOMS || atom2 >= NUM_ATOMS || !(excl & 0x1));
+#endif
+                real tempEnergy = 0.0f;
+                COMPUTE_INTERACTION
+                energy += 0.5f*tempEnergy;
+#ifdef USE_SYMMETRIC
+                force.x -= delta.x*dEdR;
+                force.y -= delta.y*dEdR;
+                force.z -= delta.z*dEdR;
+#else
+                force.x -= dEdR1.x;
+                force.y -= dEdR1.y;
+                force.z -= dEdR1.z;
+#endif
+#ifdef USE_EXCLUSIONS
+                excl >>= 1;
+#endif
+            }
+        }
+
+    // compute off diagonal neighborlist tiles
+    while(pos < end) {
+        unsigned int x = tiles[pos];
+        unsigned int j = interactingAtoms[pos*TILE_SIZE+tgx];
+
+
+
+        pos++;
+    }
+
+}
 
 /**
  * Compute the mutual induced field.

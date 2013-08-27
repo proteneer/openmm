@@ -1400,8 +1400,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
     // Conjugate Gradient Solver
 
-
-
     // no PME
     if (pmeGrid == NULL) {
         // Compute induced dipoles.
@@ -1437,8 +1435,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         cu.addAutoclearBuffer(*fieldPolar);
         cu.addAutoclearBuffer(*torque);
         */
-
-
 
         // Compute initial values for dipole
         // Set induced dipoles to polarizability times field
@@ -1478,11 +1474,14 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         double4 invPeriodicBoxSize = cu.getInvPeriodicBoxSize();
 
         // build pre-conditioner matrix m
-        const float off2 = 0.4*0.4;
-        int m = 0;
+
         // u0scale, u1scale, u2scale, u3scale all set to 1.
-        // pre-conditioner construction 
-        // the neighborlist will be an Nx6 floats size to accommodate for the tensors
+        // pre-conditioner construction stored in minv
+        // for each pair of atoms whose distance is less than 0.4, we store a float6 tensor (minv) that serves
+        // as the preconditioner
+
+        const float off2 = 0.4*0.4;
+        int m = 0;      
         for(int i=0; i<cu.getNumAtoms(); i++) {
             //int ii = ipole[i];
             float pdi = hDampAndThole[i].x;
@@ -1510,7 +1509,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                     if(damp != 0) {
                         const float pgamma = min(pti, hDampAndThole[k].y);
                         damp = -pgamma*pow((r/damp),3);
-                        if(damp > -50.0) {
+                        if(damp > -50.0) { // not really needed
                             const float expdamp = exp(damp);
                             scale3 = scale3 * (1.0f-expdamp);
                             scale5 = scale5 * (1.0f-expdamp*(1.0f-expdamp));
@@ -1592,7 +1591,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         vector<float> uindfloatBuffer1(cu.getPaddedNumAtoms()*3);
         vector<float> uinpfloatBuffer1(cu.getPaddedNumAtoms()*3);
 
-        // send induced dipoles to inducedField
         for(int i=0; i<uind.size(); i++) {
             uindfloatBuffer1[3*i+0]=uind[i].x;
             uindfloatBuffer1[3*i+1]=uind[i].y;
@@ -1614,7 +1612,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
         }
 
-
         vector<float3> hInducedField;
         vector<float3> hInducedFieldPolar;
         vector<long long> hInducedFieldLL;
@@ -1625,6 +1622,8 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
         LLVectorToFloat3Vector(hInducedFieldLL, hInducedField);
         LLVectorToFloat3Vector(hInducedFieldPolarLL, hInducedFieldPolar);
+
+        // udir is only used in initialization of the residuals
 
         // set initial conjugate gradient residual and conjugate vector
         for(int i=0; i<rsd.size(); i++) {
@@ -1652,7 +1651,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             zrsd[i].z = udiag * polarity[i] * rsd[i].z;
             zrsdp[i].z = udiag * polarity[i] * rsdp[i].z;
         }
-        // apply off-diagonal pre-conditioner elements in second phase
+        // apply off-diagonal preconditioner elements in second phase
         // uscale0a
         m = 0;
         for(int i=0; i < cu.getNumAtoms(); i++) {
