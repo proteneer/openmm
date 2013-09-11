@@ -471,16 +471,16 @@ CUmodule CudaContext::createModule(const string source, const map<string, string
             m<<"Error loading CUDA module: "<<getErrorString(result)<<" ("<<result<<")";
             throw OpenMMException(m.str());
         }
-        remove(inputFile.c_str());
-        if (rename(outputFile.c_str(), cacheFile.str().c_str()) != 0)
-            remove(outputFile.c_str());
-        remove(logFile.c_str());
+        //remove(inputFile.c_str());
+        //if (rename(outputFile.c_str(), cacheFile.str().c_str()) != 0)
+        //    remove(outputFile.c_str());
+        //remove(logFile.c_str());
         return module;
     }
     catch (...) {
-        remove(inputFile.c_str());
-        remove(outputFile.c_str());
-        remove(logFile.c_str());
+        //remove(inputFile.c_str());
+        //remove(outputFile.c_str());
+        //remove(logFile.c_str());
         throw;
     }
 }
@@ -570,6 +570,7 @@ void CudaContext::executeKernel(CUfunction kernel, void** arguments, int threads
         str<<"Error invoking kernel: "<<getErrorString(result)<<" ("<<result<<")";
         throw OpenMMException(str.str());
     }
+	cuCtxSynchronize();
 }
 
 int CudaContext::computeThreadBlockSize(double memory, bool preferShared) const {

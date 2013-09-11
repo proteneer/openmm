@@ -1,4 +1,5 @@
 #define WARPS_PER_GROUP (THREAD_BLOCK_SIZE/TILE_SIZE)
+#define TILE_SIZE 32
 
 typedef struct {
     real3 pos;
@@ -223,6 +224,7 @@ __device__ void computeOneInteraction(AtomData& atom1, AtomData& atom2, real3 de
 }
 #endif
 
+
 /**
  * Build a preconditioner used in conjugate gradient
  * 
@@ -239,25 +241,55 @@ __device__ void computeOneInteraction(AtomData& atom1, AtomData& atom2, real3 de
  * K> Compute a new induced field based on induced dipoles
  */
 
-extern "C" __global__ void initializeInducedDipoles() {
-
-}
-
-
 /*
 * Initialize rsd and rsdp using induced field, direct dipoles, and induced dipoles. 
 * rsd, rsdp, zrsd, zrsdp are store in dimension major format:
 * rsd[0*PADDED_NUM_ATOMS+i] for x coordinates in atom i
 * rsd[1*PADDED_NUM_ATOMS+i] for y coordinates in atom i
 * this ensures nicely coalesced memory access patterns
-*/ 
+*/
+
 extern "C" __global__ void initializeCG(real* __restrict__ rsd, real* __restrict__ rsdp, 
-    real* __restrict__zrsd, real3* __restrict__ zrsdp, const float* __restrict__ polarizability,
+    real* __restrict__ zrsd, real* __restrict__ zrsdp, const float* __restrict__ polarizability,
+	// note that these are reinterpret_casted as a signed long long ....
+    long long* __restrict__ inducedField, long long* __restrict__ inducedFieldPolar) {
+    const float udiag = 2.0f;
+    for(int i = threadIdx.x+blockIdx.x*blockDim.x; i < NUM_ATOMS; i += blockDim.x*gridDim.x) { 
+            real rsdx, rsdy, rsdz, rsdpx, rsdpy, rsdpz;
+            // inducedField is stored in dimension major format
+            // directDipole and inducedDipole are stored in atom major format
+            rsdx = inducedField[0*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+            rsdy = inducedField[1*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+            rsdz = inducedField[2*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+
+            rsdpx = inducedFieldPolar[0*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+            rsdpy = inducedFieldPolar[1*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+            rsdpz = inducedFieldPolar[2*PADDED_NUM_ATOMS+i]/(real)0x100000000;
+
+            rsd[0*PADDED_NUM_ATOMS+i] = rsdx;
+            rsd[1*PADDED_NUM_ATOMS+i] = rsdy;
+            rsd[2*PADDED_NUM_ATOMS+i] = rsdz;
+            rsdp[0*PADDED_NUM_ATOMS+i] = rsdpx;
+            rsdp[1*PADDED_NUM_ATOMS+i] = rsdpy;
+            rsdp[2*PADDED_NUM_ATOMS+i] = rsdpz;
+
+            zrsd[0*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdx;
+            zrsd[1*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdy;
+            zrsd[2*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdz;
+            zrsdp[0*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpx;
+            zrsdp[1*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpy;
+            zrsdp[2*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpz;
+    }
+}
+
+/*
+extern "C" __global__ void initializeCG(real* __restrict__ rsd, real* __restrict__ rsdp, 
+    real* __restrict__zrsd, real* __restrict__ zrsdp, const float* __restrict__ polarizability,
     const real* __restrict__ inducedDipole, const real* __restrict__ inducedDipolePolar,
     const real* __restrict__ directDipole, const real* __restrict__ directDipolePolar,
     unsigned long long* __restrict__ inducedField, unsigned long long* __restrict__ inducedFieldPolar) {
     const float udiag = 2.0f;
-    for(int i = threadIdx.x; i < NUM_ATOMS; i += blockDim.x) { 
+    for(int i = threadIdx.x+blockIdx.x*blockDim.x; i < NUM_ATOMS; i += blockDim.x*gridDim.x) { 
             real rsdx, rsdy, rsdz, rsdpx, rsdpy, rsdpz;
             // inducedField is stored in dimension major format
             // directDipole and inducedDipole are stored in atom major format
@@ -283,6 +315,7 @@ extern "C" __global__ void initializeCG(real* __restrict__ rsd, real* __restrict
             zrsdp[2*PADDED_NUM_ATOMS+i] = udiag * polarizability[i] * rsdpz;
     }
 }
+*/
 
 // We use the neighborlist constructed by findInteractingBlocks to apply the pre-conditioner on residuals
 // Only two types of interactions are present in this custom neighborlist:
@@ -290,34 +323,64 @@ extern "C" __global__ void initializeCG(real* __restrict__ rsd, real* __restrict
 // --horizontal accumulation
 // 2) Neighborlist tiles
 // --staggered accumulation
+
+/*
+const real3 posq1 = trimTo3(posq[atom1]);
+			const float pdi1 = dampingAndThole[atom1].x;
+			const float pti1 = dampingAndThole[atom1].y;
+			const float poli1 = polarizability[atom1];
+			real3 rsd1, rsdp1;
+			rsd1.x = rsd[0*PADDED_NUM_ATOMS+atom1];
+			rsd1.y = rsd[1*PADDED_NUM_ATOMS+atom1];
+			rsd1.z = rsd[2*PADDED_NUM_ATOMS+atom1];
+			rsdp1.x = rsdp[0*PADDED_NUM_ATOMS+atom1];
+			rsdp1.y = rsdp[1*PADDED_NUM_ATOMS+atom1];
+			rsdp1.z = rsdp[2*PADDED_NUM_ATOMS+atom1];
+			real3 zrsd1 = make_real3(0,0,0);
+			real3 zrsdp1 = make_real3(0,0,0);
+*/
+
+typedef struct {
+	real x,y,z;
+	real rsdx, rsdy, rsdz;
+	real rsdpx, rsdpy, rsdpz;
+	real zrsdx, zrsdy, zrsdz;
+	real zrsdpx, zrsdpy, zrsdpz;
+	real pdi, pti, poli;
+} CGData;
+
+// We use the neighborlist constructed by findInteractingBlocks to apply the pre-conditioner on residuals
+// Only two types of interactions are present in this custom neighborlist:
+// 1) On diagonal tiles
+// --horizontal accumulation
+// 2) Neighborlist tiles
+// --staggered accumulation
+// zrsd and zrsdp arrays need to be prezeroed on each iteration!
+
+extern "C" __global__ void applyPreconditioner() {
+
+}
+
+/*
 extern "C" __global__ void applyPreconditioner(
     unsigned int numTileIndices, const int* __restrict__ interactingTiles, const unsigned int* __restrict__ interactingAtoms, 
+	const unsigned int* __restrict__ interactionCount,
     //const tileflags* __restrict__ exclusions, const ushort2* __restrict__ exclusionTiles,
     const float* __restrict__ polarizability, const float2* __restrict__ dampingAndThole,
     const real4* posq, real4 periodicBoxSize, real4 invPeriodicBoxSize,
     const real* __restrict__ rsd, const real* __restrict__ rsdp,
     real* __restrict__ zrsd, real* __restrict__ zrsdp) {
 
-    // initialize new residuals to zero
-	// this needs to be done outside of this kernel due to race conditions
-	/*
-    for(unsigned int gid = threadIdx.x+blockDim.x*blockIdx.x; gid < PADDED_NUM_ATOMS; gid += blockDim.x*gridDim.x) {
-        zrsd[gid] = 0;
-        zrsdp[gid] = 0;
-    }
-	*/
-
     const unsigned int totalWarps = (blockDim.x*gridDim.x)/TILE_SIZE;
     const unsigned int warp = (blockIdx.x*blockDim.x+threadIdx.x)/TILE_SIZE; // global warpIndex
     const unsigned int tgx = threadIdx.x & (TILE_SIZE-1); // index within the warp
     const unsigned int tbx = threadIdx.x - tgx;           // block warpIndex
 
-    // used shared memory if the device cannot shuffle
+    // TODO: used shared memory if the device cannot shuffle
     
     const real udiag = 2.0;
     
-    // first look
-    const unsigned int lastWarp = (NUM_ATOMS+TILE_SIZE-1)/TILE_SIZE;
+	const unsigned int lastWarp = (NUM_ATOMS+TILE_SIZE-1)/TILE_SIZE;
 
     // first loop: diagonal tiles
     for(int pos = warp; pos < lastWarp; pos += totalWarps) {
@@ -333,8 +396,7 @@ extern "C" __global__ void applyPreconditioner(
         rsdp1.x = rsdp[0*PADDED_NUM_ATOMS+atom1];
         rsdp1.y = rsdp[1*PADDED_NUM_ATOMS+atom1];
         rsdp1.z = rsdp[2*PADDED_NUM_ATOMS+atom1];
-        
-        // used for accumulation
+		        // used for accumulation
         real3 zrsd1, zrsdp1;
 
         zrsd1 = make_real3(0, 0, 0);
@@ -429,8 +491,11 @@ extern "C" __global__ void applyPreconditioner(
 
     const unsigned int numTiles = interactionCount[0];
 	
-    int pos = (numTiles > maxTiles ? startTileIndex+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
-    int end = (numTiles > maxTiles ? startTileIndex+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
+    // int pos = (numTiles > maxTiles ? startTileIndex+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
+    // int end = (numTiles > maxTiles ? startTileIndex+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
+
+	int pos = (numTiles > maxTiles ? 0+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
+    int end = (numTiles > maxTiles ? 0+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
 
     int skipBase = 0;
     int currentSkipIndex = tbx;
@@ -597,6 +662,8 @@ extern "C" __global__ void applyPreconditioner(
         pos++;
     }
 }
+
+*/
 
 /**
  * Compute the mutual induced field.

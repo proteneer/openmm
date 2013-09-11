@@ -407,8 +407,16 @@ private:
     CudaArray* pmeAtomRange;
     CudaArray* pmeAtomGridIndex;
     CudaArray* lastPositions;
+
+	CudaArray* cuda_rsd;
+	CudaArray* cuda_rsdp;
+	CudaArray* cuda_zrsd;
+	CudaArray* cuda_zrsdp;
+
     CudaSort* sort;
+	CudaNonbondedUtilities* cgNonbonded;
     cufftHandle fft;
+	CUfunction applyPreconditionerKernel, initializeCGKernel;
     CUfunction computeMomentsKernel, recordInducedDipolesKernel, computeFixedFieldKernel, computeInducedFieldKernel, updateInducedFieldKernel, electrostaticsKernel, mapTorqueKernel;
     CUfunction pmeGridIndexKernel, pmeSpreadFixedMultipolesKernel, pmeSpreadInducedDipolesKernel, pmeFinishSpreadChargeKernel, pmeConvolutionKernel;
     CUfunction pmeFixedPotentialKernel, pmeInducedPotentialKernel, pmeFixedForceKernel, pmeInducedForceKernel, pmeRecordInducedFieldDipolesKernel, computePotentialKernel;
