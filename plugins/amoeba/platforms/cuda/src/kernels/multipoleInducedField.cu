@@ -487,7 +487,18 @@ extern "C" __global__ void applyPreconditioner(
             }
         }
         if(atom1 < NUM_ATOMS) {
-            atomicAdd(&zrsd[0*PADDED_NUM_ATOMS+atom1], zrsd1.x);
+        
+
+			printf("raw %d: %f %f %f %f %f %f\n", atom1, zrsd[0*PADDED_NUM_ATOMS+atom1], 
+													 zrsd[1*PADDED_NUM_ATOMS+atom1],
+													 zrsd[2*PADDED_NUM_ATOMS+atom1],
+													 zrsdp[0*PADDED_NUM_ATOMS+atom1],
+													 zrsdp[1*PADDED_NUM_ATOMS+atom1],
+													 zrsdp[2*PADDED_NUM_ATOMS+atom1]);
+			printf("inp %d: %f %f %f %f %f %f\n", atom1, zrsd1.x, zrsd1.y, zrsd1.z,  zrsdp1.x, zrsdp1.y, zrsdp1.z);
+			
+
+			atomicAdd(&zrsd[0*PADDED_NUM_ATOMS+atom1], zrsd1.x);
             atomicAdd(&zrsd[1*PADDED_NUM_ATOMS+atom1], zrsd1.y);
             atomicAdd(&zrsd[2*PADDED_NUM_ATOMS+atom1], zrsd1.z);
             atomicAdd(&zrsdp[0*PADDED_NUM_ATOMS+atom1], zrsdp1.x);
@@ -508,11 +519,6 @@ extern "C" __global__ void applyPreconditioner(
 
 	int pos = (numTiles > maxTiles ? 0+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
     int end = (numTiles > maxTiles ? 0+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
-
-	/*
-    int skipBase = 0;
-    int currentSkipIndex = tbx;
-	*/
 
     while (pos < end) {
         real3 force = make_real3(0);

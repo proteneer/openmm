@@ -1289,8 +1289,6 @@ void CudaCalcAmoebaMultipoleForceKernel::initialize(const System& system, const 
 
     // Add an interaction to the default nonbonded kernel.  This doesn't actually do any calculations.  It's
     // just so that CudaNonbondedUtilities will build the exclusion flags and maintain the neighbor list.
-    
-
     cu.getNonbondedUtilities().addInteraction(usePME, usePME, true, force.getCutoffDistance(), exclusions, "", force.getForceGroup());
     cu.getNonbondedUtilities().setUsePadding(false);
     cu.addForce(new ForceInfo(force));
@@ -1301,21 +1299,15 @@ void CudaCalcAmoebaMultipoleForceKernel::initialize(const System& system, const 
 		cgExclusions[i] = identity;
 	}
 
-
-
-	//    int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
-    //labFrameDipoles = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "labFrameDipoles");
-
-	    //dampingAndThole = CudaArray::create<float2>(cu, paddedNumAtoms, "dampingAndThole");
-	// Set up neighborlist algorithms for CG note that neighborlist comprises of only the diagonal exclusions
-
-	cout << "init3" << endl;
-
 	cgNonbonded = new CudaNonbondedUtilities(cu);
-	// always use cutoff! but periodicity varies
+	
+	// TODO: allow user to change CG cutoff
 	cgNonbonded->addInteraction(true, usePME, true, 0.4, exclusions, "", force.getForceGroup());
+	
 	cgNonbonded->setUsePadding(false);
 	cgNonbonded->initialize(system);
+
+	// helper arrays
 	cuda_rsd = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "rsd");
 	cuda_rsdp = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "rsdp");
 	cuda_zrsd = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "zrsd");
@@ -1327,7 +1319,6 @@ void CudaCalcAmoebaMultipoleForceKernel::initializeScaleFactors() {
     CudaNonbondedUtilities& nb = cu.getNonbondedUtilities();
     
     // Figure out the covalent flag values to use for each atom pair.
-
     vector<ushort2> exclusionTiles;
     nb.getExclusionTiles().download(exclusionTiles);
     map<pair<int, int>, int> exclusionTileMap;
@@ -1408,8 +1399,6 @@ void LLVectorToFloat3Vector(const vector<long long> & source, vector<float3> &de
 
 double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
 
-			cout << "0" << endl;
-
     if (!hasInitializedScaleFactors) {
         initializeScaleFactors();
         for (int i = 0; i < (int) context.getForceImpls().size() && gkKernel == NULL; i++) {
@@ -1432,31 +1421,42 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
     int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
     void* npt = NULL;
 
-
 	// prepare the neighborlist, computes interactingTiles, interactionCount, and interactingAtoms
-
+	cgNonbonded->initialize(system);
 	cgNonbonded->prepareInteractions();
-	//cgNonbonded->computeInteractions();
+	cgNonbonded->updateNeighborListSize();
 
-	cout << "1.0" << endl;
-	CudaArray &ita = cgNonbonded->getInteractingAtoms();
-	cout << "2.0" << endl;
-	vector<unsigned int> foo;
-	ita.download(foo);
-	cout << "3.0" << endl;
-	for(int i=0; i < foo.size(); i++){
-		cout << foo[i] << endl;
+	// For small test cases, these will be zero. 
+	/* debug code
+	cout << "interactingAtoms: " << endl;
+	vector<unsigned int> iAtoms;
+	cgNonbonded->getInteractingAtoms().download(iAtoms);
+	for(int i=0; i < iAtoms.size(); i++) {
+		cout << iAtoms[i] << endl;
 	}
+
+	cout << "interactingTiles: " << endl;
+	vector<int> iTiles;
+	cgNonbonded->getInteractingTiles().download(iTiles);
+	for(int i=0; i < iTiles.size(); i++) {
+		cout << iTiles[i] << endl;
+	}
+
+	vector<int> ixnCount;
+	cgNonbonded->getInteractionCount().download(ixnCount);
+
+	cout << "number of interactions: " << ixnCount[0] << endl;
+
+	cout << "numTiles: " << cgNonbonded->getNumTiles() << endl;
+	cout << "maxTiles: " << cgNonbonded->getMaxTiles() << endl;
+	*/
 
     // Conjugate Gradient Solver
 
     // no PME
     if (pmeGrid == NULL) {
         // Compute induced dipoles.
-        
-
-		cout << "1" << endl;
-
+      
         /* DELETE THIS LATER?
         dampingAndThole = CudaArray::create<float2>(cu, paddedNumAtoms, "dampingAndThole");
         polarizability = CudaArray::create<float>(cu, paddedNumAtoms, "polarizability");
@@ -1618,11 +1618,8 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             uinp[i].z = polarity[i] * hFixedFieldp[i].z;
         }
 
-
-		// polynomial predictor code (not used)
-
+		// TODO: polynomial predictor code (not used)
         // set tolerances for computation of mutual induced dipoles
-
         // set up temporary arrays used in conjugate gradient
 
         float3 if3 = make_float3(0,0,0);
@@ -1660,8 +1657,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
         }
 
-		cout << "a" << endl;
-
         vector<float3> hInducedField;
         vector<float3> hInducedFieldPolar;
         vector<long long> hInducedFieldLL;
@@ -1675,9 +1670,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
 
         // udir is only used in initialization of the residuals
-
         // set initial conjugate gradient residual and conjugate vector
-
 		// in this case, rsd is basically equal to hInducedField[i].x because
 		// we dont have a polynomial predictor
 		// hence, udir is never used!
@@ -1719,8 +1712,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
             cu.executeKernel(computeInducedFieldKernel, computeInducedFieldArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
         }*/
 		
-
-
         // use diagonal preconditioner elements as first approximation
 
 		// ported to CUDA via initialize CG Kernel
@@ -1771,14 +1762,10 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         // apply off-diagonal preconditioner elements in second phase
         // uscale0a
 
-		cout << "b" << endl;
-
 		unsigned int numTiles = cgNonbonded->getNumTiles();
 		unsigned int maxTiles = cgNonbonded->getMaxTiles();
 
 		cout << numTiles << " " << maxTiles << endl;
-
-		cout << "c" << endl;
 
 		void *applyPreconditionerArgs[] = {&numTiles, 
 										   &maxTiles,	
@@ -1797,16 +1784,12 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
 		cu.executeKernel(applyPreconditionerKernel, applyPreconditionerArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
 
-				cout << "d" << endl;
-
 		// download data into host
-		cout << "z" << endl;
 		vector<float> hrsd, hrsdp, hzrsd, hzrsdp;
 		cuda_rsd->download(hrsd);
 		cuda_rsdp->download(hrsdp);
 		cuda_zrsd->download(hzrsd);
 		cuda_zrsdp->download(hzrsdp);
-
 
 		for(int i=0; i < cu.getPaddedNumAtoms(); i++) {
 			rsd[i].x = hrsd[0*cu.getPaddedNumAtoms()+i];

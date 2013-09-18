@@ -254,12 +254,6 @@ void CudaNonbondedUtilities::initialize(const System& system) {
             maxTiles = numTiles;
         if (maxTiles < 1)
             maxTiles = 1;
-        
-		
-		
-		cout << "using cutoff, maxTiles = " << maxTiles <<  endl;
-
-		
 		interactingTiles = CudaArray::create<int>(context, maxTiles, "interactingTiles");
         interactingAtoms = CudaArray::create<int>(context, CudaContext::TileSize*maxTiles, "interactingAtoms");
         interactionCount = CudaArray::create<unsigned int>(context, 1, "interactionCount");
@@ -360,7 +354,12 @@ void CudaNonbondedUtilities::prepareInteractions() {
     context.executeKernel(findBlockBoundsKernel, &findBlockBoundsArgs[0], context.getNumAtoms());
     blockSorter->sort(*sortedBlocks);
     context.executeKernel(sortBoxDataKernel, &sortBoxDataArgs[0], context.getNumAtoms());
-    context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
+    
+	cout << "execute findInteractingBlocksKernel" << endl;
+	
+	cout << "cutoff distance supplied: " << getCutoffDistance() << endl;
+
+	context.executeKernel(findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtoms(), 256);
 }
 
 void CudaNonbondedUtilities::computeInteractions() {
@@ -375,9 +374,17 @@ void CudaNonbondedUtilities::updateNeighborListSize() {
     if (!useCutoff)
         return;
     unsigned int* pinnedInteractionCount = (unsigned int*) context.getPinnedBuffer();
-    interactionCount->download(pinnedInteractionCount);
+
+
+    
+	interactionCount->download(pinnedInteractionCount);
+
+		cout << "PIC: " << *pinnedInteractionCount << endl;
+
+
     if (pinnedInteractionCount[0] <= (unsigned int) maxTiles)
         return;
+
 
     // The most recent timestep had too many interactions to fit in the arrays.  Make the arrays bigger to prevent
     // this from happening in the future.
