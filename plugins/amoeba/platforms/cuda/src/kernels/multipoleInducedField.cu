@@ -1,5 +1,6 @@
 #define WARPS_PER_GROUP (THREAD_BLOCK_SIZE/TILE_SIZE)
 #define TILE_SIZE 32
+#define CUTOFF2_SQUARED 0.16
 
 typedef struct {
     real3 pos;
@@ -224,7 +225,6 @@ __device__ void computeOneInteraction(AtomData& atom1, AtomData& atom2, real3 de
 }
 #endif
 
-
 /**
  * Build a preconditioner used in conjugate gradient
  * 
@@ -356,14 +356,17 @@ typedef struct {
 // 2) Neighborlist tiles
 // --staggered accumulation
 // zrsd and zrsdp arrays need to be prezeroed on each iteration!
+// 3) zrsd and zrsdp are assumed to have already been estimated via diagonal preconditioner elements
 
+/*
 extern "C" __global__ void applyPreconditioner() {
 
 }
+*/
 
-/*
 extern "C" __global__ void applyPreconditioner(
-    unsigned int numTileIndices, const int* __restrict__ interactingTiles, const unsigned int* __restrict__ interactingAtoms, 
+    unsigned int numTileIndices, unsigned int maxTiles,
+	const int* __restrict__ tiles, const unsigned int* __restrict__ interactingAtoms, 
 	const unsigned int* __restrict__ interactionCount,
     //const tileflags* __restrict__ exclusions, const ushort2* __restrict__ exclusionTiles,
     const float* __restrict__ polarizability, const float2* __restrict__ dampingAndThole,
@@ -414,10 +417,15 @@ extern "C" __global__ void applyPreconditioner(
             posq2.x = real_shfl(posq1.x, j);
             posq2.y = real_shfl(posq1.y, j);
             posq2.z = real_shfl(posq1.z, j);
-            real3 rsd2, rsdp2;
-            rsd2.x = real_shfl(rsd1.x, j);
+            
+			real3 rsd2, rsdp2;
+			rsd2.x = real_shfl(rsd1.x, j);
             rsd2.y = real_shfl(rsd1.y, j);
             rsd2.z = real_shfl(rsd1.z, j);
+
+			rsdp2.x = real_shfl(rsdp1.x, j);
+			rsdp2.y = real_shfl(rsdp1.y, j);
+			rsdp2.z = real_shfl(rsdp1.z, j);
 
             const float pdi2 = real_shfl(pdi1, j);
             const float pti2 = real_shfl(pti1, j);
@@ -428,22 +436,25 @@ extern "C" __global__ void applyPreconditioner(
             real xr = posq1.x - posq2.x;
             real yr = posq1.y - posq2.y;
             real zr = posq1.z - posq2.z;
+
+#ifdef USE_PERIODIC
             xr -= floor(xr*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
             yr -= floor(yr*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
             zr -= floor(zr*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
 
             const real r2 = xr*xr + yr*yr + zr*zr;
 
             if(atom1 == atom2) {
-                zrsd1.x += udiag * polarizability[atom1] * rsd[atom1].x;
-                zrsd1.y += udiag * polarizability[atom1] * rsd[atom1].y;
-                zrsd1.z += udiag * polarizability[atom1] * rsd[atom1].z;
+                //zrsd1.x += udiag * polarizability[atom1] * rsd[0*PADDED_NUM_ATOMS+atom1];
+                //zrsd1.y += udiag * polarizability[atom1] * rsd[1*PADDED_NUM_ATOMS+atom1];
+                //zrsd1.z += udiag * polarizability[atom1] * rsd[2*PADDED_NUM_ATOMS+atom1];
             } else if(r2 < CUTOFF2_SQUARED) {
                 // load parameters for CG
                 const real r = SQRT(r2);
-                const real scale3 = 1.0;
-                const real scale5 = 1.0;
-                const real damp = pdi1*pdi2;
+                real scale3 = 1.0;
+                real scale5 = 1.0;
+                real damp = pdi1*pdi2;
                 if(damp != 0) {
                     const real pgamma = min(pti1, pti2);
                     damp = -pgamma*pow((r/damp),3);
@@ -458,7 +469,7 @@ extern "C" __global__ void applyPreconditioner(
                 const real rr5 = 3.0f*scale5*polik/(r*r2*r2);
       
                 // load minv
-                real m0,m1,m2,m3,m4,m5;
+                // real m0,m1,m2,m3,m4,m5;
                 const real m0 = rr5*xr*xr-rr3;
                 const real m1 = rr5*xr*yr;
                 const real m2 = rr5*xr*zr;
@@ -487,21 +498,25 @@ extern "C" __global__ void applyPreconditioner(
     // second loop: neighborlist tiles
 	// two cases:
 	// 1. neighborlist not built properly (numTiles > maxTiles)
-	// 2. neighborlist built properly (numTiles < maxTiles)
+	// 2. neighborlist built properly (numTiles <= maxTiles)
 
     const unsigned int numTiles = interactionCount[0];
-	
+
     // int pos = (numTiles > maxTiles ? startTileIndex+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
     // int end = (numTiles > maxTiles ? startTileIndex+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
 
 	int pos = (numTiles > maxTiles ? 0+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
     int end = (numTiles > maxTiles ? 0+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
 
+
+
+	printf("%d: %d %d\n", threadIdx.x+blockIdx.x*blockDim.x, pos, end);
+	/*
     int skipBase = 0;
     int currentSkipIndex = tbx;
+	*/
 
     while (pos < end) {
-        const bool hasExclusions = false;
         real3 force = make_real3(0);
         bool includeTile = true;
         // Extract the coordinates of this tile.
@@ -515,6 +530,7 @@ extern "C" __global__ void applyPreconditioner(
                 y += (x < y ? -1 : 1);
                 x = (pos-y*NUM_BLOCKS+y*(y+1)/2);
             }
+			// ignore on-diagonal tiles (which are exclusions)
 			if(x == y) {
 				includeTile = false;
 			}
@@ -540,7 +556,7 @@ extern "C" __global__ void applyPreconditioner(
 			real3 zrsdp1 = make_real3(0,0,0);
 
 			// dimension 2 variables are passed along via shuffles
-		    unsigned int atom2 = (numTiles <= maxTiles ? interactingAtoms[pos*TILE_SIZE+tgx] : y*TILE_SIZE + tgx);
+		    int atom2 = (numTiles <= maxTiles ? interactingAtoms[pos*TILE_SIZE+tgx] : y*TILE_SIZE + tgx);
 			real3 posq2 = trimTo3(posq[atom2]);
 			float pdi2 = dampingAndThole[atom2].x;
 			float pti2 = dampingAndThole[atom2].y;
@@ -556,24 +572,25 @@ extern "C" __global__ void applyPreconditioner(
 			real3 zrsd2 = make_real3(0,0,0);
 			real3 zrsdp2 = make_real3(0,0,0); 
 
-            for (const int j = 0; j < TILE_SIZE; j++) {
+            for (int j = 0; j < TILE_SIZE; j++) {
 
 				real xr = posq1.x - posq2.x;
 				real yr = posq1.y - posq2.y;
 				real zr = posq1.z - posq2.z;
-		
+#ifdef USE_PERIODIC
 				xr -= floor(xr*invPeriodicBoxSize.x+0.5f)*periodicBoxSize.x;
 				yr -= floor(yr*invPeriodicBoxSize.y+0.5f)*periodicBoxSize.y;
 				zr -= floor(zr*invPeriodicBoxSize.z+0.5f)*periodicBoxSize.z;
+#endif
 
 				const real r2 = xr*xr + yr*yr + zr*zr;
 
                 if (r2 < CUTOFF2_SQUARED) {
                     // load parameters for CG
 					const real r = SQRT(r2);
-					const real scale3 = 1.0;
-					const real scale5 = 1.0;
-					const real damp = pdi1*pdi2;
+					real scale3 = 1.0;
+					real scale5 = 1.0;
+					real damp = pdi1*pdi2;
 					if(damp != 0) {
 						const real pgamma = min(pti1, pti2);
 						damp = -pgamma*pow((r/damp),3);
@@ -588,7 +605,7 @@ extern "C" __global__ void applyPreconditioner(
 					const real rr5 = 3.0f*scale5*polik/(r*r2*r2);
       
 					// load minv
-					real m0,m1,m2,m3,m4,m5;
+					// real m0,m1,m2,m3,m4,m5;
 					const real m0 = rr5*xr*xr-rr3;
 					const real m1 = rr5*xr*yr;
 					const real m2 = rr5*xr*zr;
@@ -614,7 +631,7 @@ extern "C" __global__ void applyPreconditioner(
 				// the % is extraneous as the PTX spec informs that the % mask happens automatically. 
 				const unsigned int srcLane = (tgx+1)%(TILE_SIZE);
 
-				unsigned int atom2 = __shfl(atom2, (tgx+1)%32);
+				int atom2 = __shfl(atom2, (tgx+1)%32);
 				posq2.x = real_shfl(posq2.x, srcLane);
 				posq2.y = real_shfl(posq2.y, srcLane);
 				posq2.z = real_shfl(posq2.z, srcLane);
@@ -640,7 +657,7 @@ extern "C" __global__ void applyPreconditioner(
 				zrsdp2.z = real_shfl(zrsdp2.z, srcLane);
 
             }
-#endif
+
 			// Write results.
 	        if(atom1 < NUM_ATOMS) {
 				atomicAdd(&zrsd[0*PADDED_NUM_ATOMS+atom1], zrsd1.x);
@@ -662,8 +679,6 @@ extern "C" __global__ void applyPreconditioner(
         pos++;
     }
 }
-
-*/
 
 /**
  * Compute the mutual induced field.

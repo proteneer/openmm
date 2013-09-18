@@ -891,8 +891,6 @@ static int findFFTDimension(int minimum) {
 void CudaCalcAmoebaMultipoleForceKernel::initialize(const System& system, const AmoebaMultipoleForce& force) {
     cu.setAsCurrent();
 
-	cout << "init0" << endl;
-
     // Initialize multipole parameters.
 
     numMultipoles = force.getNumMultipoles();
@@ -1308,22 +1306,20 @@ void CudaCalcAmoebaMultipoleForceKernel::initialize(const System& system, const 
 	//    int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
     //labFrameDipoles = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "labFrameDipoles");
 
-	cout << "init1" << endl;
-
 	    //dampingAndThole = CudaArray::create<float2>(cu, paddedNumAtoms, "dampingAndThole");
 	// Set up neighborlist algorithms for CG note that neighborlist comprises of only the diagonal exclusions
+
+	cout << "init3" << endl;
+
 	cgNonbonded = new CudaNonbondedUtilities(cu);
-	cgNonbonded->addInteraction(usePME, usePME, true, 0.4, exclusions, "", force.getForceGroup());
+	// always use cutoff! but periodicity varies
+	cgNonbonded->addInteraction(true, usePME, true, 0.4, exclusions, "", force.getForceGroup());
 	cgNonbonded->setUsePadding(false);
 	cgNonbonded->initialize(system);
-	cout << "init2" << endl;
-
 	cuda_rsd = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "rsd");
 	cuda_rsdp = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "rsdp");
 	cuda_zrsd = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "zrsd");
 	cuda_zrsdp = new CudaArray(cu, 3*paddedNumAtoms, elementSize, "zrsdp");
-
-		cout << "init3" << endl;
 }
 
 void CudaCalcAmoebaMultipoleForceKernel::initializeScaleFactors() {
@@ -1440,6 +1436,17 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 	// prepare the neighborlist, computes interactingTiles, interactionCount, and interactingAtoms
 
 	cgNonbonded->prepareInteractions();
+	//cgNonbonded->computeInteractions();
+
+	cout << "1.0" << endl;
+	CudaArray &ita = cgNonbonded->getInteractingAtoms();
+	cout << "2.0" << endl;
+	vector<unsigned int> foo;
+	ita.download(foo);
+	cout << "3.0" << endl;
+	for(int i=0; i < foo.size(); i++){
+		cout << foo[i] << endl;
+	}
 
     // Conjugate Gradient Solver
 
@@ -1713,27 +1720,6 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
         }*/
 		
 
-		/*
-
-		int numTiles = cgNonbonded->getNumTiles();
-
-		void *applyPreconditionerArgs[] = {&numTiles, 
-			                               &cgNonbonded->getInteractingTiles().getDevicePointer(),
-										   &cgNonbonded->getInteractingAtoms().getDevicePointer(),
-										   &cgNonbonded->getInteractionCount().getDevicePointer(),
-										   &polarizability->getDevicePointer(),
-										   &dampingAndThole->getDevicePointer(),
-										   &cu.getPosq().getDevicePointer(),
-		                                   cu.getPeriodicBoxSizePointer(),
-										   cu.getInvPeriodicBoxSizePointer(),
-										   &cuda_rsd->getDevicePointer(),
-										   &cuda_rsdp->getDevicePointer(),
-										   &cuda_zrsd->getDevicePointer(),
-										   &cuda_zrsdp->getDevicePointer()};
-
-		cu.executeKernel(applyPreconditionerKernel, applyPreconditionerArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
-
-		*/
 
         // use diagonal preconditioner elements as first approximation
 
@@ -1753,12 +1739,15 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 
 		// adaptor into CPU code
 		
+		/*
 		cout << "b" << endl;
 		vector<float> hrsd, hrsdp, hzrsd, hzrsdp;
 		cuda_rsd->download(hrsd);
 		cuda_rsdp->download(hrsdp);
 		cuda_zrsd->download(hzrsd);
 		cuda_zrsdp->download(hzrsdp);
+
+		
 		for(int i=0; i < cu.getPaddedNumAtoms(); i++) {
 			rsd[i].x = hrsd[0*cu.getPaddedNumAtoms()+i];
 			rsd[i].y = hrsd[1*cu.getPaddedNumAtoms()+i];
@@ -1776,10 +1765,73 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 			zrsdp[i].y = hzrsdp[1*cu.getPaddedNumAtoms()+i];
 			zrsdp[i].z = hzrsdp[2*cu.getPaddedNumAtoms()+i];
 		}
+		*/
 		
 
         // apply off-diagonal preconditioner elements in second phase
         // uscale0a
+
+		cout << "b" << endl;
+
+		unsigned int numTiles = cgNonbonded->getNumTiles();
+		unsigned int maxTiles = cgNonbonded->getMaxTiles();
+
+		cout << numTiles << " " << maxTiles << endl;
+
+		cout << "c" << endl;
+
+		void *applyPreconditionerArgs[] = {&numTiles, 
+										   &maxTiles,	
+			                               &cgNonbonded->getInteractingTiles().getDevicePointer(),
+										   &cgNonbonded->getInteractingAtoms().getDevicePointer(),
+										   &cgNonbonded->getInteractionCount().getDevicePointer(),
+										   &polarizability->getDevicePointer(),
+										   &dampingAndThole->getDevicePointer(),
+										   &cu.getPosq().getDevicePointer(),
+		                                   cu.getPeriodicBoxSizePointer(),
+										   cu.getInvPeriodicBoxSizePointer(),
+										   &cuda_rsd->getDevicePointer(),
+										   &cuda_rsdp->getDevicePointer(),
+										   &cuda_zrsd->getDevicePointer(),
+										   &cuda_zrsdp->getDevicePointer()};
+
+		cu.executeKernel(applyPreconditionerKernel, applyPreconditionerArgs, numForceThreadBlocks*inducedFieldThreads, inducedFieldThreads);
+
+				cout << "d" << endl;
+
+		// download data into host
+		cout << "z" << endl;
+		vector<float> hrsd, hrsdp, hzrsd, hzrsdp;
+		cuda_rsd->download(hrsd);
+		cuda_rsdp->download(hrsdp);
+		cuda_zrsd->download(hzrsd);
+		cuda_zrsdp->download(hzrsdp);
+
+
+		for(int i=0; i < cu.getPaddedNumAtoms(); i++) {
+			rsd[i].x = hrsd[0*cu.getPaddedNumAtoms()+i];
+			rsd[i].y = hrsd[1*cu.getPaddedNumAtoms()+i];
+			rsd[i].z = hrsd[2*cu.getPaddedNumAtoms()+i];
+
+			rsdp[i].x = hrsdp[0*cu.getPaddedNumAtoms()+i];
+			rsdp[i].y = hrsdp[1*cu.getPaddedNumAtoms()+i];
+			rsdp[i].z = hrsdp[2*cu.getPaddedNumAtoms()+i];
+
+			zrsd[i].x = hzrsd[0*cu.getPaddedNumAtoms()+i];
+			zrsd[i].y = hzrsd[1*cu.getPaddedNumAtoms()+i];
+			zrsd[i].z = hzrsd[2*cu.getPaddedNumAtoms()+i];
+
+			zrsdp[i].x = hzrsdp[0*cu.getPaddedNumAtoms()+i];
+			zrsdp[i].y = hzrsdp[1*cu.getPaddedNumAtoms()+i];
+			zrsdp[i].z = hzrsdp[2*cu.getPaddedNumAtoms()+i];
+		}
+
+		if(fabs(zrsd[0].x - 0.0015566) > 1e-3)
+			throw(std::runtime_error("Bad"));
+		else 
+			throw(std::runtime_error("Good"));
+
+		/* move to GPU
         m = 0;
         for(int i=0; i < cu.getNumAtoms(); i++) {
             for(int k=i+1; k < cu.getNumAtoms(); k++) {
@@ -1817,14 +1869,7 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                 }
             }
         }
-
-		for(int i=0; i < zrsd.size(); i++) {
-			cout << zrsd[i].x << " " << zrsd[i].y << " " << zrsd[i].z << endl;
-		}
-
-		for(int i=0; i < zrsdp.size(); i++) {
-			cout << zrsdp[i].x << " " << zrsdp[i].y << " " << zrsdp[i].z << endl;
-		}
+		*/
 
         // set initial search directions
 

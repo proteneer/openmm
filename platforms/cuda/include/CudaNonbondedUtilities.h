@@ -224,6 +224,14 @@ public:
     int getNumTiles() const {
         return numTiles;
     }
+
+	/**
+	 *
+	 */
+	int getMaxTiles() const {
+		return maxTiles;
+	}
+
     /**
      * Set whether to add padding to the cutoff distance when building the neighbor list.
      * This increases the size of the neighbor list (and thus the cost of computing interactions),

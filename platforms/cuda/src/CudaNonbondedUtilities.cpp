@@ -254,7 +254,13 @@ void CudaNonbondedUtilities::initialize(const System& system) {
             maxTiles = numTiles;
         if (maxTiles < 1)
             maxTiles = 1;
-        interactingTiles = CudaArray::create<int>(context, maxTiles, "interactingTiles");
+        
+		
+		
+		cout << "using cutoff, maxTiles = " << maxTiles <<  endl;
+
+		
+		interactingTiles = CudaArray::create<int>(context, maxTiles, "interactingTiles");
         interactingAtoms = CudaArray::create<int>(context, CudaContext::TileSize*maxTiles, "interactingAtoms");
         interactionCount = CudaArray::create<unsigned int>(context, 1, "interactionCount");
         int elementSize = (context.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
