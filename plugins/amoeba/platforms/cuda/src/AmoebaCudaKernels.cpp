@@ -1292,15 +1292,10 @@ void CudaCalcAmoebaMultipoleForceKernel::initialize(const System& system, const 
     // Add an interaction to the default nonbonded kernel.  This doesn't actually do any calculations.  It's
     // just so that CudaNonbondedUtilities will build the exclusion flags and maintain the neighbor list.
     
-	
-	cout << "init0.5" << endl;
 
     cu.getNonbondedUtilities().addInteraction(usePME, usePME, true, force.getCutoffDistance(), exclusions, "", force.getForceGroup());
     cu.getNonbondedUtilities().setUsePadding(false);
     cu.addForce(new ForceInfo(force));
-
-		cout << "init0.7 " << numMultipoles <<endl;
-
 
 	vector<vector<int> > cgExclusions(numMultipoles);
 	for(int i=0; i < cgExclusions.size(); i++) {
@@ -1822,6 +1817,14 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
                 }
             }
         }
+
+		for(int i=0; i < zrsd.size(); i++) {
+			cout << zrsd[i].x << " " << zrsd[i].y << " " << zrsd[i].z << endl;
+		}
+
+		for(int i=0; i < zrsdp.size(); i++) {
+			cout << zrsdp[i].x << " " << zrsdp[i].y << " " << zrsdp[i].z << endl;
+		}
 
         // set initial search directions
 
