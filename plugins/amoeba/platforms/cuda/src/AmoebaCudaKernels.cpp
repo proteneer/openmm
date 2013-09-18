@@ -1826,6 +1826,10 @@ double CudaCalcAmoebaMultipoleForceKernel::execute(ContextImpl& context, bool in
 			zrsdp[i].z = hzrsdp[2*cu.getPaddedNumAtoms()+i];
 		}
 
+		for(int i=0; i < zrsd.size(); i++) {
+			cout << zrsd[i].x << " " << zrsd[i].y << " " << zrsd[i].z << endl;
+		}
+
 		if(fabs(zrsd[0].x - 0.0015566) > 1e-3)
 			throw(std::runtime_error("Bad"));
 		else 

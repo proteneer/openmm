@@ -387,6 +387,7 @@ extern "C" __global__ void applyPreconditioner(
 
     // first loop: diagonal tiles
     for(int pos = warp; pos < lastWarp; pos += totalWarps) {
+
         // suppose shuffles are available
         const unsigned int atom1 = pos*TILE_SIZE + tgx;
 
@@ -508,9 +509,6 @@ extern "C" __global__ void applyPreconditioner(
 	int pos = (numTiles > maxTiles ? 0+warp*numTileIndices/totalWarps : warp*numTiles/totalWarps);
     int end = (numTiles > maxTiles ? 0+(warp+1)*numTileIndices/totalWarps : (warp+1)*numTiles/totalWarps);
 
-
-
-	printf("%d: %d %d\n", threadIdx.x+blockIdx.x*blockDim.x, pos, end);
 	/*
     int skipBase = 0;
     int currentSkipIndex = tbx;
