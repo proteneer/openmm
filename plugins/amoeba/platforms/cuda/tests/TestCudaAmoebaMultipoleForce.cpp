@@ -2876,15 +2876,15 @@ int main(int argc, char* argv[]) {
 
         // test mutual polarization, no cutoff
 
-        testMultipoleAmmoniaMutualPolarization( log );
+        //testMultipoleAmmoniaMutualPolarization( log );
 
-        /*
 
         // test multipole direct & mutual polarization using PME
 
-        testMultipoleWaterPMEDirectPolarization( log );
-        testMultipoleWaterPMEMutualPolarization( log );
+        // testMultipoleWaterPMEDirectPolarization( log );
 
+		testMultipoleWaterPMEMutualPolarization( log );
+		/*
         // check validation of traceless/symmetric quadrupole tensor
 
         testQuadrupoleValidation( log );
